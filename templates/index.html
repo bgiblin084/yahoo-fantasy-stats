@@ -1,0 +1,869 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Yahoo Fantasy Stats Dashboard</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+        
+        .header {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .header h1 {
+            color: #333;
+            margin-bottom: 10px;
+        }
+        
+        .header p {
+            color: #666;
+            font-size: 14px;
+        }
+        
+        .league-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+        
+        .info-item {
+            background: #f8f9fa;
+            padding: 15px;
+            border-radius: 8px;
+        }
+        
+        .info-label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+        
+        .info-value {
+            font-size: 18px;
+            font-weight: bold;
+            color: #333;
+        }
+        
+        .section {
+            background: white;
+            border-radius: 10px;
+            padding: 30px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+        }
+        
+        .section h2 {
+            color: #333;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 2px solid #667eea;
+        }
+        
+        .table-container {
+            overflow-x: auto;
+            margin-bottom: 30px;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 14px;
+        }
+        
+        th {
+            background: #667eea;
+            color: white;
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            position: sticky;
+            top: 0;
+        }
+        
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid #eee;
+        }
+        
+        tr:hover {
+            background: #f8f9fa;
+        }
+        
+        .playoff-separator {
+            border-top: 3px solid #667eea;
+        }
+        
+        .playoff-separator td {
+            padding-top: 15px;
+        }
+        
+        .chart-container {
+            margin-bottom: 30px;
+        }
+        
+        .plotly-chart {
+            width: 100%;
+            height: 400px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1 id="league-name">🏈 Yahoo Fantasy Stats Dashboard</h1>
+            <p id="league-description">Loading league information...</p>
+            <div class="league-info" id="league-info">
+                <!-- League info will be populated here -->
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Team Standings</h2>
+            <div class="table-container">
+                <table id="teams-table">
+                    <thead>
+                        <tr id="teams-header"></tr>
+                    </thead>
+                    <tbody id="teams-body"></tbody>
+                </table>
+            </div>
+            
+            <div class="chart-container">
+                <div id="standings-chart" class="plotly-chart"></div>
+            </div>
+            
+            <div class="chart-container">
+                <div id="points-chart" class="plotly-chart"></div>
+            </div>
+            
+            <div class="chart-container">
+                <div id="moves-chart" class="plotly-chart"></div>
+            </div>
+            
+            <div class="chart-container">
+                <div id="faab-chart" class="plotly-chart"></div>
+            </div>
+            
+            <div class="chart-container">
+                <div id="trades-chart" class="plotly-chart"></div>
+            </div>
+        </div>
+        
+        <div class="section">
+            <h2>Weekly Matchups</h2>
+            <div class="table-container">
+                <table id="weekly-table">
+                    <thead>
+                        <tr id="weekly-header"></tr>
+                    </thead>
+                    <tbody id="weekly-body"></tbody>
+                </table>
+            </div>
+            
+            <div class="chart-container">
+                <div id="weekly-scores-chart" class="plotly-chart"></div>
+            </div>
+            
+            <div class="chart-container">
+                <div id="standings-by-week-chart" class="plotly-chart"></div>
+            </div>
+            
+            <div class="chart-container">
+                <div id="cumulative-points-chart" class="plotly-chart"></div>
+            </div>
+        </div>
+    </div>
+    
+    <script>
+        // Parse data from server
+        const teamsData = {{ teams_data|safe }};
+        const weeklyData = {{ weekly_data|safe }};
+        const weeklyStatsData = {{ weekly_stats_data|safe }};
+        const leagueInfo = {{ league_info|tojson|safe }};
+        
+        // Display league info
+        if (leagueInfo) {
+            // Update page heading with league name
+            const leagueNameElement = document.getElementById('league-name');
+            if (leagueNameElement && leagueInfo.name) {
+                leagueNameElement.textContent = `🏈 ${leagueInfo.name}`;
+            }
+            const leagueInfoDiv = document.getElementById('league-info');
+            leagueInfoDiv.innerHTML = `
+                <div class="info-item">
+                    <div class="info-label">Season</div>
+                    <div class="info-value">${leagueInfo.season || 'N/A'}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Teams</div>
+                    <div class="info-value">${leagueInfo.num_teams || 'N/A'}</div>
+                </div>
+                <div class="info-item">
+                    <div class="info-label">Current Week</div>
+                    <div class="info-value">${leagueInfo.current_week || 'N/A'}</div>
+                </div>
+            `;
+        }
+        
+        // Display teams table
+        function displayTeamsTable(data) {
+            if (!data || data.length === 0) return;
+            
+            const header = document.getElementById('teams-header');
+            const body = document.getElementById('teams-body');
+            
+            // Get headers and reorder: manager_nickname first, exclude team_key
+            const allHeaders = Object.keys(data[0]);
+            const headers = ['manager_nickname', ...allHeaders.filter(h => h !== 'manager_nickname' && h !== 'team_key')];
+            
+            header.innerHTML = headers.map(h => `<th>${h.replace(/_/g, ' ').toUpperCase()}</th>`).join('');
+            
+            // Sort by rank (ascending)
+            const sortedData = [...data].sort((a, b) => {
+                const rankA = parseInt(a.rank) || 999;
+                const rankB = parseInt(b.rank) || 999;
+                return rankA - rankB;
+            });
+            
+            // Get rows - add separator after 4th team (playoff cutoff)
+            body.innerHTML = sortedData.map((row, index) => {
+                const separatorClass = index === 4 ? 'playoff-separator' : '';
+                return `<tr class="${separatorClass}">${headers.map(h => `<td>${row[h] || 'N/A'}</td>`).join('')}</tr>`;
+            }).join('');
+        }
+        
+        // Display weekly table
+        function displayWeeklyTable(data) {
+            if (!data || data.length === 0) return;
+            
+            const header = document.getElementById('weekly-header');
+            const body = document.getElementById('weekly-body');
+            
+            // Get headers and exclude team keys
+            const allHeaders = Object.keys(data[0]);
+            const headers = allHeaders.filter(h => h !== 'team1_key' && h !== 'team2_key');
+            header.innerHTML = headers.map(h => `<th>${h.replace(/_/g, ' ').toUpperCase()}</th>`).join('');
+            
+            // Get rows
+            body.innerHTML = data.map(row => 
+                `<tr>${headers.map(h => `<td>${row[h] || 'N/A'}</td>`).join('')}</tr>`
+            ).join('');
+        }
+        
+        // Create standings chart
+        function createStandingsChart(data) {
+            if (!data || data.length === 0) return;
+            
+            const sortedData = [...data].sort((a, b) => parseInt(a.rank) - parseInt(b.rank));
+            
+            const trace = {
+                x: sortedData.map(d => d.team_name),
+                y: sortedData.map(d => parseFloat(d.win_percentage) || 0),
+                type: 'bar',
+                marker: {
+                    color: '#667eea'
+                }
+            };
+            
+            // Add vertical line for playoff cutoff (after 4th team)
+            // For categorical x-axis, we'll use a shape with the team name index
+            const playoffCutoffIndex = 3.5; // Between 4th (index 3) and 5th (index 4) team
+            
+            const layout = {
+                title: 'Win Percentage by Team',
+                xaxis: { 
+                    title: 'Team',
+                    type: 'category'
+                },
+                yaxis: { title: 'Win Percentage', range: [0, 1] },
+                margin: { l: 50, r: 50, t: 50, b: 100 },
+                shapes: [{
+                    type: 'line',
+                    xref: 'paper',
+                    yref: 'y',
+                    x0: (4 / sortedData.length) - 0.01,
+                    x1: (4 / sortedData.length) - 0.01,
+                    y0: 0,
+                    y1: 1,
+                    line: {
+                        color: '#667eea',
+                        width: 3,
+                        dash: 'dash'
+                    },
+                    layer: 'above'
+                }],
+                annotations: [{
+                    x: sortedData[3]?.team_name || '',
+                    xref: 'x',
+                    y: 0.95,
+                    yref: 'y',
+                    text: 'Playoff Cutoff',
+                    showarrow: true,
+                    arrowhead: 2,
+                    arrowcolor: '#667eea',
+                    bgcolor: '#667eea',
+                    bordercolor: '#667eea',
+                    font: {
+                        color: 'white',
+                        size: 11
+                    },
+                    ax: 0,
+                    ay: -20
+                }]
+            };
+            
+            Plotly.newPlot('standings-chart', [trace], layout, {responsive: true});
+        }
+        
+        // Create points chart
+        function createPointsChart(data) {
+            if (!data || data.length === 0) return;
+            
+            const sortedData = [...data].sort((a, b) => parseFloat(b.points_for) - parseFloat(a.points_for));
+            
+            const trace1 = {
+                x: sortedData.map(d => d.team_name),
+                y: sortedData.map(d => parseFloat(d.points_for) || 0),
+                name: 'Points For',
+                type: 'bar',
+                marker: { color: '#667eea' }
+            };
+            
+            const trace2 = {
+                x: sortedData.map(d => d.team_name),
+                y: sortedData.map(d => parseFloat(d.points_against) || 0),
+                name: 'Points Against',
+                type: 'bar',
+                marker: { color: '#764ba2' }
+            };
+            
+            const layout = {
+                title: 'Points For vs Points Against',
+                xaxis: { title: 'Team' },
+                yaxis: { title: 'Points' },
+                barmode: 'group',
+                margin: { l: 50, r: 50, t: 50, b: 100 }
+            };
+            
+            Plotly.newPlot('points-chart', [trace1, trace2], layout, {responsive: true});
+        }
+        
+        // Create cumulative moves by week chart
+        function createMovesChart(teamsData, weeklyStatsData) {
+            if (!teamsData || teamsData.length === 0 || !weeklyStatsData || weeklyStatsData.length === 0) {
+                console.log('Missing data for moves chart:', { teamsData: teamsData?.length, weeklyStatsData: weeklyStatsData?.length });
+                return;
+            }
+            
+            // Group weekly stats by team
+            const teamStatsByWeek = {};
+            weeklyStatsData.forEach(stat => {
+                const teamKey = stat.team_key;
+                const week = parseInt(stat.week);
+                if (!teamKey || !week) return;
+                if (!teamStatsByWeek[teamKey]) {
+                    teamStatsByWeek[teamKey] = {};
+                }
+                teamStatsByWeek[teamKey][week] = stat;
+            });
+            
+            // Get all weeks and sort
+            const allWeeks = [...new Set(weeklyStatsData.map(s => parseInt(s.week)).filter(w => !isNaN(w)))].sort((a, b) => a - b);
+            
+            if (allWeeks.length === 0) {
+                console.log('No valid weeks found for moves chart');
+                return;
+            }
+            
+            // Create traces for each team
+            const traces = teamsData.map(team => {
+                const teamKey = team.team_key;
+                const teamName = team.team_name;
+                const teamStats = teamStatsByWeek[teamKey] || {};
+                
+                // Get cumulative moves for each week (API returns cumulative totals)
+                // Since Yahoo API returns current totals for all weeks, we'll show the progression
+                let lastMoves = 0;
+                const movesData = allWeeks.map(week => {
+                    const weekStat = teamStats[week];
+                    if (weekStat && weekStat.number_of_moves !== undefined && weekStat.number_of_moves !== null) {
+                        const moves = parseInt(weekStat.number_of_moves) || 0;
+                        // Track the maximum value seen (since API returns cumulative totals)
+                        lastMoves = Math.max(lastMoves, moves);
+                        return moves;
+                    }
+                    // If no data for this week, use previous week's value
+                    return lastMoves;
+                });
+                
+                return {
+                    x: allWeeks,
+                    y: movesData,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: teamName,
+                    line: { width: 2 },
+                    marker: { size: 6 }
+                };
+            });
+            
+            const layout = {
+                title: 'Cumulative Moves by Week',
+                xaxis: { title: 'Week', type: 'linear' },
+                yaxis: { title: 'Cumulative Moves', type: 'linear' },
+                margin: { l: 50, r: 50, t: 50, b: 50 },
+                hovermode: 'closest'
+            };
+            
+            Plotly.newPlot('moves-chart', traces, layout, {responsive: true});
+        }
+        
+        // Create FAAB balance by week chart
+        function createFAABChart(teamsData, weeklyStatsData) {
+            if (!teamsData || teamsData.length === 0 || !weeklyStatsData || weeklyStatsData.length === 0) return;
+            
+            // Group weekly stats by team
+            const teamStatsByWeek = {};
+            weeklyStatsData.forEach(stat => {
+                const teamKey = stat.team_key;
+                const week = parseInt(stat.week);
+                if (!teamStatsByWeek[teamKey]) {
+                    teamStatsByWeek[teamKey] = {};
+                }
+                teamStatsByWeek[teamKey][week] = stat;
+            });
+            
+            // Get all weeks
+            const allWeeks = [...new Set(weeklyStatsData.map(s => parseInt(s.week)))].sort((a, b) => a - b);
+            
+            // Create traces for each team
+            const traces = teamsData.map(team => {
+                const teamKey = team.team_key;
+                const teamName = team.team_name;
+                const teamStats = teamStatsByWeek[teamKey] || {};
+                
+                // Get FAAB balance for each week
+                // Handle missing weeks by using previous week's value
+                let lastFAAB = 100;
+                const faabData = allWeeks.map(week => {
+                    const weekStat = teamStats[week];
+                    if (weekStat && weekStat.faab_balance !== undefined && weekStat.faab_balance !== null) {
+                        const faab = parseInt(weekStat.faab_balance) || 100;
+                        lastFAAB = faab; // Update last known value
+                        return faab;
+                    }
+                    // If no data for this week, use previous week's value
+                    return lastFAAB;
+                });
+                
+                return {
+                    x: allWeeks,
+                    y: faabData,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: teamName,
+                    line: { width: 2 },
+                    marker: { size: 6 }
+                };
+            });
+            
+            const layout = {
+                title: 'FAAB Balance by Week',
+                xaxis: { title: 'Week' },
+                yaxis: { title: 'FAAB Balance' },
+                margin: { l: 50, r: 50, t: 50, b: 50 },
+                hovermode: 'closest'
+            };
+            
+            Plotly.newPlot('faab-chart', traces, layout, {responsive: true});
+        }
+        
+        // Create cumulative trades by week chart
+        function createTradesChart(teamsData, weeklyStatsData) {
+            if (!teamsData || teamsData.length === 0 || !weeklyStatsData || weeklyStatsData.length === 0) return;
+            
+            // Group weekly stats by team
+            const teamStatsByWeek = {};
+            weeklyStatsData.forEach(stat => {
+                const teamKey = stat.team_key;
+                const week = parseInt(stat.week);
+                if (!teamStatsByWeek[teamKey]) {
+                    teamStatsByWeek[teamKey] = {};
+                }
+                teamStatsByWeek[teamKey][week] = stat;
+            });
+            
+            // Get all weeks
+            const allWeeks = [...new Set(weeklyStatsData.map(s => parseInt(s.week)))].sort((a, b) => a - b);
+            
+            // Create traces for each team
+            const traces = teamsData.map(team => {
+                const teamKey = team.team_key;
+                const teamName = team.team_name;
+                const teamStats = teamStatsByWeek[teamKey] || {};
+                
+                // Get cumulative trades for each week (API returns cumulative totals)
+                // Handle missing weeks by using previous week's value
+                let lastTrades = 0;
+                const tradesData = allWeeks.map(week => {
+                    const weekStat = teamStats[week];
+                    if (weekStat && weekStat.number_of_trades !== undefined && weekStat.number_of_trades !== null) {
+                        const trades = parseInt(weekStat.number_of_trades) || 0;
+                        lastTrades = trades; // Update last known value
+                        return trades;
+                    }
+                    // If no data for this week, use previous week's value
+                    return lastTrades;
+                });
+                
+                return {
+                    x: allWeeks,
+                    y: tradesData,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: teamName,
+                    line: { width: 2 },
+                    marker: { size: 6 }
+                };
+            });
+            
+            const layout = {
+                title: 'Cumulative Trades by Week',
+                xaxis: { title: 'Week' },
+                yaxis: { title: 'Cumulative Trades' },
+                margin: { l: 50, r: 50, t: 50, b: 50 },
+                hovermode: 'closest'
+            };
+            
+            Plotly.newPlot('trades-chart', traces, layout, {responsive: true});
+        }
+        
+        // Create cumulative points for chart
+        function createCumulativePointsChart(weeklyData, teamsData) {
+            if (!weeklyData || weeklyData.length === 0 || !teamsData || teamsData.length === 0) return;
+            
+            // Create team name mapping
+            const teamMap = {};
+            teamsData.forEach(team => {
+                teamMap[team.team_key] = team.team_name;
+            });
+            
+            // Get all weeks and sort
+            const weeks = [...new Set(weeklyData.map(row => parseInt(row.week)))].sort((a, b) => a - b);
+            
+            // Initialize cumulative points for each team
+            const teamCumulativePoints = {};
+            teamsData.forEach(team => {
+                teamCumulativePoints[team.team_key] = {};
+                weeks.forEach(week => {
+                    teamCumulativePoints[team.team_key][week] = 0;
+                });
+            });
+            
+            // Process weekly data to accumulate points by week
+            // First, collect points for each team per week
+            const weeklyPoints = {};
+            weeks.forEach(week => {
+                weeklyPoints[week] = {};
+                teamsData.forEach(team => {
+                    weeklyPoints[week][team.team_key] = 0;
+                });
+            });
+            
+            // Process all matchups to get weekly points
+            weeklyData.forEach(matchup => {
+                const week = parseInt(matchup.week);
+                const team1Key = matchup.team1_key;
+                const team2Key = matchup.team2_key;
+                const team1Points = parseFloat(matchup.team1_points) || 0;
+                const team2Points = parseFloat(matchup.team2_points) || 0;
+                
+                if (weeklyPoints[week]) {
+                    if (weeklyPoints[week][team1Key] !== undefined) {
+                        weeklyPoints[week][team1Key] += team1Points;
+                    }
+                    if (weeklyPoints[week][team2Key] !== undefined) {
+                        weeklyPoints[week][team2Key] += team2Points;
+                    }
+                }
+            });
+            
+            // Now calculate cumulative points by processing weeks in order
+            weeks.forEach((week, weekIndex) => {
+                teamsData.forEach(team => {
+                    const teamKey = team.team_key;
+                    const pointsThisWeek = weeklyPoints[week][teamKey] || 0;
+                    
+                    if (weekIndex === 0) {
+                        // First week: cumulative = this week's points
+                        teamCumulativePoints[teamKey][week] = pointsThisWeek;
+                    } else {
+                        // Subsequent weeks: cumulative = previous cumulative + this week's points
+                        const previousWeek = weeks[weekIndex - 1];
+                        const previousCumulative = teamCumulativePoints[teamKey][previousWeek] || 0;
+                        teamCumulativePoints[teamKey][week] = previousCumulative + pointsThisWeek;
+                    }
+                });
+            });
+            
+            // Create traces for each team
+            const traces = teamsData.map(team => {
+                const teamKey = team.team_key;
+                const teamName = teamMap[teamKey] || teamKey;
+                const pointsData = weeks.map(week => {
+                    return teamCumulativePoints[teamKey] ? (teamCumulativePoints[teamKey][week] || 0) : 0;
+                });
+                
+                return {
+                    x: weeks,
+                    y: pointsData,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: teamName,
+                    line: { width: 2 },
+                    marker: { size: 6 }
+                };
+            });
+            
+            const layout = {
+                title: 'Cumulative Points For by Week',
+                xaxis: { title: 'Week' },
+                yaxis: { title: 'Cumulative Points For' },
+                margin: { l: 50, r: 50, t: 50, b: 50 },
+                hovermode: 'closest'
+            };
+            
+            Plotly.newPlot('cumulative-points-chart', traces, layout, {responsive: true});
+        }
+        
+        // Create weekly scores chart
+        function createWeeklyScoresChart(data) {
+            if (!data || data.length === 0) return;
+            
+            // Group by week and calculate average scores
+            const weeklyAvg = {};
+            data.forEach(row => {
+                const week = row.week;
+                if (!weeklyAvg[week]) {
+                    weeklyAvg[week] = { scores: [], count: 0 };
+                }
+                const score1 = parseFloat(row.team1_points) || 0;
+                const score2 = parseFloat(row.team2_points) || 0;
+                weeklyAvg[week].scores.push(score1, score2);
+                weeklyAvg[week].count += 2;
+            });
+            
+            const weeks = Object.keys(weeklyAvg).sort((a, b) => parseInt(a) - parseInt(b));
+            const avgScores = weeks.map(w => {
+                const scores = weeklyAvg[w].scores;
+                return scores.reduce((a, b) => a + b, 0) / scores.length;
+            });
+            
+            const trace = {
+                x: weeks,
+                y: avgScores,
+                type: 'scatter',
+                mode: 'lines+markers',
+                name: 'Average Score',
+                line: { color: '#667eea', width: 3 },
+                marker: { size: 8 }
+            };
+            
+            const layout = {
+                title: 'Average Weekly Scores',
+                xaxis: { title: 'Week' },
+                yaxis: { title: 'Average Points' },
+                margin: { l: 50, r: 50, t: 50, b: 50 }
+            };
+            
+            Plotly.newPlot('weekly-scores-chart', [trace], layout, {responsive: true});
+        }
+        
+        // Create standings by week chart
+        function createStandingsByWeekChart(weeklyData, teamsData) {
+            if (!weeklyData || weeklyData.length === 0 || !teamsData || teamsData.length === 0) return;
+            
+            // Get team names from teamsData and create a mapping
+            const teamMap = {};
+            teamsData.forEach(team => {
+                teamMap[team.team_key] = team.team_name;
+            });
+            
+            // Calculate standings for each week
+            const weeklyStandings = {};
+            const weeks = [...new Set(weeklyData.map(row => parseInt(row.week)))].sort((a, b) => a - b);
+            
+            // Initialize standings for each week
+            weeks.forEach(week => {
+                weeklyStandings[week] = {};
+                teamsData.forEach(team => {
+                    weeklyStandings[week][team.team_key] = { wins: 0, losses: 0, ties: 0, pointsFor: 0, pointsAgainst: 0 };
+                });
+            });
+            
+            // Process each matchup to accumulate wins/losses/points
+            weeklyData.forEach(matchup => {
+                const week = parseInt(matchup.week);
+                const team1Key = matchup.team1_key;
+                const team2Key = matchup.team2_key;
+                const team1Points = parseFloat(matchup.team1_points) || 0;
+                const team2Points = parseFloat(matchup.team2_points) || 0;
+                
+                if (weeklyStandings[week]) {
+                    // Update points
+                    if (weeklyStandings[week][team1Key]) {
+                        weeklyStandings[week][team1Key].pointsFor += team1Points;
+                        weeklyStandings[week][team1Key].pointsAgainst += team2Points;
+                    }
+                    if (weeklyStandings[week][team2Key]) {
+                        weeklyStandings[week][team2Key].pointsFor += team2Points;
+                        weeklyStandings[week][team2Key].pointsAgainst += team1Points;
+                    }
+                    
+                    // Update wins/losses
+                    if (team1Points > team2Points) {
+                        if (weeklyStandings[week][team1Key]) weeklyStandings[week][team1Key].wins += 1;
+                        if (weeklyStandings[week][team2Key]) weeklyStandings[week][team2Key].losses += 1;
+                    } else if (team2Points > team1Points) {
+                        if (weeklyStandings[week][team1Key]) weeklyStandings[week][team1Key].losses += 1;
+                        if (weeklyStandings[week][team2Key]) weeklyStandings[week][team2Key].wins += 1;
+                    } else {
+                        if (weeklyStandings[week][team1Key]) weeklyStandings[week][team1Key].ties += 1;
+                        if (weeklyStandings[week][team2Key]) weeklyStandings[week][team2Key].ties += 1;
+                    }
+                }
+            });
+            
+            // Calculate cumulative standings and ranks for each week
+            const cumulativeStandings = {};
+            weeks.forEach(week => {
+                cumulativeStandings[week] = {};
+                teamsData.forEach(team => {
+                    const teamKey = team.team_key;
+                    let totalWins = 0;
+                    let totalLosses = 0;
+                    let totalTies = 0;
+                    let totalPointsFor = 0;
+                    let totalPointsAgainst = 0;
+                    
+                    // Sum up all previous weeks including current
+                    for (let w = 1; w <= week; w++) {
+                        if (weeklyStandings[w] && weeklyStandings[w][teamKey]) {
+                            totalWins += weeklyStandings[w][teamKey].wins;
+                            totalLosses += weeklyStandings[w][teamKey].losses;
+                            totalTies += weeklyStandings[w][teamKey].ties;
+                            totalPointsFor += weeklyStandings[w][teamKey].pointsFor;
+                            totalPointsAgainst += weeklyStandings[w][teamKey].pointsAgainst;
+                        }
+                    }
+                    
+                    cumulativeStandings[week][teamKey] = {
+                        wins: totalWins,
+                        losses: totalLosses,
+                        ties: totalTies,
+                        pointsFor: totalPointsFor,
+                        pointsAgainst: totalPointsAgainst,
+                        winPercentage: totalWins / (totalWins + totalLosses + totalTies) || 0
+                    };
+                });
+                
+                // Calculate ranks for this week
+                const teams = Object.keys(cumulativeStandings[week]);
+                teams.sort((a, b) => {
+                    const teamA = cumulativeStandings[week][a];
+                    const teamB = cumulativeStandings[week][b];
+                    
+                    // Primary: win percentage
+                    if (teamB.winPercentage !== teamA.winPercentage) {
+                        return teamB.winPercentage - teamA.winPercentage;
+                    }
+                    // Secondary: points for
+                    return teamB.pointsFor - teamA.pointsFor;
+                });
+                
+                teams.forEach((teamKey, index) => {
+                    cumulativeStandings[week][teamKey].rank = index + 1;
+                });
+            });
+            
+            // Create traces for each team
+            const traces = teamsData.map(team => {
+                const teamKey = team.team_key;
+                const teamName = team.team_name;
+                const ranks = weeks.map(week => cumulativeStandings[week][teamKey]?.rank || teamsData.length);
+                
+                return {
+                    x: weeks,
+                    y: ranks,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: teamName,
+                    line: { width: 2 },
+                    marker: { size: 6 }
+                };
+            });
+            
+            // Invert y-axis so rank 1 is at top
+            const layout = {
+                title: 'Standings by Week',
+                xaxis: { title: 'Week' },
+                yaxis: { 
+                    title: 'Rank',
+                    autorange: 'reversed' // Invert so rank 1 is at top
+                },
+                margin: { l: 50, r: 50, t: 50, b: 50 },
+                hovermode: 'closest'
+            };
+            
+            Plotly.newPlot('standings-by-week-chart', traces, layout, {responsive: true});
+        }
+        
+        // Initialize page
+        if (teamsData && teamsData.length > 0) {
+            displayTeamsTable(teamsData);
+            createStandingsChart(teamsData);
+            createPointsChart(teamsData);
+            
+            if (weeklyStatsData && weeklyStatsData.length > 0) {
+                createMovesChart(teamsData, weeklyStatsData);
+                createFAABChart(teamsData, weeklyStatsData);
+                createTradesChart(teamsData, weeklyStatsData);
+            }
+        }
+        
+        if (weeklyData && weeklyData.length > 0) {
+            displayWeeklyTable(weeklyData);
+            createWeeklyScoresChart(weeklyData);
+            if (teamsData && teamsData.length > 0) {
+                createStandingsByWeekChart(weeklyData, teamsData);
+                createCumulativePointsChart(weeklyData, teamsData);
+            }
+        }
+    </script>
+</body>
+</html>
+
