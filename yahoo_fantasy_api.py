@@ -8,6 +8,7 @@ Author: Braedon Giblin
 """
 
 import json
+import os
 from typing import Dict, List, Optional, Any
 try:
     import pandas as pd
@@ -15,6 +16,14 @@ try:
 except ImportError:
     PANDAS_AVAILABLE = False
     pd = None
+
+# Import cache manager if available
+try:
+    from cache_manager import CacheManager
+    CACHE_AVAILABLE = True
+except ImportError:
+    CACHE_AVAILABLE = False
+    CacheManager = None
 
 
 class YahooFantasyAPI:
@@ -27,16 +36,19 @@ class YahooFantasyAPI:
     
     BASE_URL = "https://fantasysports.yahooapis.com/fantasy/v2"
     
-    def __init__(self, oauth_session, oauth_client=None):
+    def __init__(self, oauth_session, oauth_client=None, use_cache=True):
         """
         Initialize the Yahoo Fantasy API client.
         
         Args:
             oauth_session: Authenticated OAuth2Session from requests_oauthlib
             oauth_client: Optional YahooOAuth instance for automatic token refresh
+            use_cache: Whether to use local cache for prior seasons (default: True)
         """
         self.oauth_session = oauth_session
         self.oauth_client = oauth_client
+        self.use_cache = use_cache and CACHE_AVAILABLE
+        self.cache_manager = CacheManager() if self.use_cache else None
     
     def _make_request(self, url, params=None, retry=True):
         """
@@ -146,12 +158,14 @@ class YahooFantasyAPI:
         # Parse and return leagues
         return self._parse_leagues(leagues_data)
     
-    def get_league_info(self, league_key: str) -> Optional[Dict[str, Any]]:
+    def get_league_info(self, league_key: str, force_refresh: bool = False) -> Optional[Dict[str, Any]]:
         """
         Get and parse basic league information.
+        Uses cache for prior seasons if available.
         
         Args:
             league_key: League key (e.g., '461.l.621700')
+            force_refresh: If True, bypass cache and fetch from API
             
         Returns:
             dict: Parsed league information dictionary, or None if not found
@@ -159,6 +173,12 @@ class YahooFantasyAPI:
         Raises:
             Exception: If API call fails or response cannot be parsed
         """
+        # Check cache first (unless forcing refresh)
+        if self.use_cache and not force_refresh:
+            cached_data = self.cache_manager.get(league_key, 'league_info')
+            if cached_data is not None:
+                return cached_data
+        
         url = f"{self.BASE_URL}/league/{league_key}"
         response = self._make_request(url, params={'format': 'json'})
         
@@ -171,7 +191,15 @@ class YahooFantasyAPI:
             raise Exception(f"Failed to parse JSON response. Status: {response.status_code}, Response: {response.text[:200]}")
         
         # Parse and return league info
-        return self._parse_league_info(league_data)
+        league_info = self._parse_league_info(league_data)
+        
+        # Cache the result if it's a prior season
+        if self.use_cache and league_info:
+            is_prior = self.cache_manager.is_prior_season(league_info)
+            if is_prior:
+                self.cache_manager.set(league_key, 'league_info', league_info)
+        
+        return league_info
     
     def get_league_teams(self, league_key: str) -> List[Dict[str, Any]]:
         """
@@ -345,15 +373,17 @@ class YahooFantasyAPI:
         
         return weekly_transactions
     
-    def get_all_teams_weekly_stats(self, league_key: str, start_week: Optional[int] = None, end_week: Optional[int] = None) -> List[Dict[str, Any]]:
+    def get_all_teams_weekly_stats(self, league_key: str, start_week: Optional[int] = None, end_week: Optional[int] = None, force_refresh: bool = False) -> List[Dict[str, Any]]:
         """
         Get weekly stats for all teams in a league.
         Uses transaction data to calculate actual week-by-week cumulative moves and trades.
+        Uses cache for prior seasons if available.
         
         Args:
             league_key: League key (e.g., '461.l.621700')
             start_week: Starting week number (default: 1)
             end_week: Ending week number (default: current week)
+            force_refresh: If True, bypass cache and fetch from API
             
         Returns:
             list: List of weekly team stats dictionaries
@@ -361,8 +391,27 @@ class YahooFantasyAPI:
         import time
         from datetime import datetime, timedelta
         
-        # Get league info to determine available weeks
-        league_info = self.get_league_info(league_key)
+        # Get league info to check if prior season
+        league_info = self.get_league_info(league_key, force_refresh=force_refresh)
+        is_prior_season = self.cache_manager.is_prior_season(league_info) if self.use_cache and league_info else False
+        
+        # Check cache first for prior seasons (unless forcing refresh)
+        if self.use_cache and not force_refresh and is_prior_season:
+            cached_data = self.cache_manager.get(league_key, 'weekly_stats')
+            if cached_data is not None:
+                # Filter by week range if specified
+                if start_week is not None or end_week is not None:
+                    filtered_data = []
+                    for item in cached_data:
+                        week = item.get('week', 0)
+                        if start_week is not None and week < start_week:
+                            continue
+                        if end_week is not None and week > end_week:
+                            continue
+                        filtered_data.append(item)
+                    return filtered_data
+                return cached_data
+        
         if not league_info:
             return []
         
@@ -561,6 +610,10 @@ class YahooFantasyAPI:
                     'number_of_trades': trades,
                     'faab_balance': faab_balance
                 })
+        
+        # Cache the result if it's a prior season
+        if self.use_cache and is_prior_season:
+            self.cache_manager.set(league_key, 'weekly_stats', weekly_stats_list)
         
         return weekly_stats_list
     
@@ -1003,20 +1056,37 @@ class YahooFantasyAPI:
         
         return expected_stats
     
-    def get_teams_stats_dataframe(self, league_key: str) -> Optional['pd.DataFrame']:
+    def get_teams_stats_dataframe(self, league_key: str, force_refresh: bool = False) -> Optional['pd.DataFrame']:
         """
         Get all team stats for a league and return as a pandas DataFrame.
         Uses standings endpoint which includes team stats and standings information.
         Also includes expected wins and losses based on record percentage vs all.
+        Uses cache for prior seasons if available.
         
         Args:
             league_key: League key (e.g., '461.l.621700')
+            force_refresh: If True, bypass cache and fetch from API
             
         Returns:
             pd.DataFrame: DataFrame containing team stats, or None if pandas is not available
         """
         if not PANDAS_AVAILABLE:
             raise ImportError("pandas is required for this functionality. Install it with: pip install pandas")
+        
+        # Check cache first (unless forcing refresh)
+        if self.use_cache and not force_refresh:
+            cached_data = self.cache_manager.get(league_key, 'teams_stats')
+            if cached_data is not None:
+                try:
+                    df = pd.DataFrame(cached_data)
+                    return df
+                except Exception:
+                    # If cached data is invalid, continue to fetch from API
+                    pass
+        
+        # Get league info to check if prior season
+        league_info = self.get_league_info(league_key, force_refresh=force_refresh)
+        is_prior_season = self.cache_manager.is_prior_season(league_info) if self.use_cache and league_info else False
         
         # Try to get standings first (includes team stats)
         try:
@@ -1064,6 +1134,12 @@ class YahooFantasyAPI:
                                     df.loc[mask, 'win_percentage_difference'] = round(difference, 3)
                             except (ValueError, TypeError):
                                 pass
+                
+                # Cache the result if it's a prior season
+                if self.use_cache and is_prior_season:
+                    # Convert DataFrame to dict for caching
+                    df_dict = df.to_dict(orient='records')
+                    self.cache_manager.set(league_key, 'teams_stats', df_dict)
                 
                 return df
             else:
@@ -1540,14 +1616,16 @@ class YahooFantasyAPI:
         
         return teams_list
     
-    def get_weekly_dataframe(self, league_key: str, start_week: Optional[int] = None, end_week: Optional[int] = None) -> Optional['pd.DataFrame']:
+    def get_weekly_dataframe(self, league_key: str, start_week: Optional[int] = None, end_week: Optional[int] = None, force_refresh: bool = False) -> Optional['pd.DataFrame']:
         """
         Get weekly matchup data for a league and return as a pandas DataFrame.
+        Uses cache for prior seasons if available.
         
         Args:
             league_key: League key (e.g., '461.l.621700')
             start_week: Starting week number (default: 1)
             end_week: Ending week number (default: current week from league info)
+            force_refresh: If True, bypass cache and fetch from API
             
         Returns:
             pd.DataFrame: DataFrame containing weekly matchup data, or None if pandas is not available
@@ -1556,9 +1634,11 @@ class YahooFantasyAPI:
             raise ImportError("pandas is required for this functionality. Install it with: pip install pandas")
         
         # Get league info to determine available weeks
-        league_info = self.get_league_info(league_key)
+        league_info = self.get_league_info(league_key, force_refresh=force_refresh)
         if not league_info:
             return None
+        
+        is_prior_season = self.cache_manager.is_prior_season(league_info) if self.use_cache and league_info else False
         
         current_week = int(league_info.get('current_week', 1))
         start = int(league_info.get('start_week', 1))
@@ -1569,6 +1649,20 @@ class YahooFantasyAPI:
             start = start_week
         if end_week is not None:
             end = end_week
+        
+        # Check cache first for prior seasons (unless forcing refresh)
+        if self.use_cache and not force_refresh and is_prior_season:
+            cached_data = self.cache_manager.get(league_key, 'weekly_data')
+            if cached_data is not None:
+                try:
+                    df = pd.DataFrame(cached_data)
+                    # Filter by week range if specified
+                    if start_week is not None or end_week is not None:
+                        df = df[(df['week'] >= start) & (df['week'] <= end)]
+                    return df
+                except Exception:
+                    # If cached data is invalid, continue to fetch from API
+                    pass
         
         # Collect weekly data
         weekly_data_list = []
@@ -1591,6 +1685,12 @@ class YahooFantasyAPI:
         
         # Add record_percentage_vs_all column (percentage of teams each team would beat that week)
         df = self._add_record_percentage_vs_all_to_weekly_df(df)
+        
+        # Cache the result if it's a prior season
+        if self.use_cache and is_prior_season:
+            # Convert DataFrame to dict for caching
+            df_dict = df.to_dict(orient='records')
+            self.cache_manager.set(league_key, 'weekly_data', df_dict)
         
         return df
     
@@ -1838,15 +1938,17 @@ class YahooFantasyAPI:
         
         return df
     
-    def get_weekly_team_performance_dataframe(self, league_key: str, start_week: Optional[int] = None, end_week: Optional[int] = None) -> Optional['pd.DataFrame']:
+    def get_weekly_team_performance_dataframe(self, league_key: str, start_week: Optional[int] = None, end_week: Optional[int] = None, force_refresh: bool = False) -> Optional['pd.DataFrame']:
         """
         Get weekly performance data for all teams with points and record percentage vs all.
         Returns one row per team per week.
+        Uses cache for prior seasons if available.
         
         Args:
             league_key: League key (e.g., '461.l.621700')
             start_week: Starting week number (default: 1)
             end_week: Ending week number (default: current week from league info)
+            force_refresh: If True, bypass cache and fetch from API
             
         Returns:
             pd.DataFrame: DataFrame with columns: week, team_key, team_name, points, record_percentage_vs_all
@@ -1854,8 +1956,29 @@ class YahooFantasyAPI:
         if not PANDAS_AVAILABLE:
             raise ImportError("pandas is required for this functionality. Install it with: pip install pandas")
         
+        # Get league info to check if prior season
+        league_info = self.get_league_info(league_key, force_refresh=force_refresh)
+        is_prior_season = self.cache_manager.is_prior_season(league_info) if self.use_cache and league_info else False
+        
+        # Check cache first for prior seasons (unless forcing refresh)
+        if self.use_cache and not force_refresh and is_prior_season:
+            cached_data = self.cache_manager.get(league_key, 'weekly_performance')
+            if cached_data is not None:
+                try:
+                    df = pd.DataFrame(cached_data)
+                    # Filter by week range if specified
+                    if start_week is not None or end_week is not None:
+                        league_info = self.get_league_info(league_key, force_refresh=force_refresh)
+                        start = start_week if start_week is not None else int(league_info.get('start_week', 1))
+                        end = end_week if end_week is not None else int(league_info.get('end_week', int(league_info.get('current_week', 1))))
+                        df = df[(df['week'] >= start) & (df['week'] <= end)]
+                    return df
+                except Exception:
+                    # If cached data is invalid, continue to fetch from API
+                    pass
+        
         # Get the weekly matchup dataframe
-        weekly_df = self.get_weekly_dataframe(league_key, start_week, end_week)
+        weekly_df = self.get_weekly_dataframe(league_key, start_week, end_week, force_refresh=force_refresh)
         if weekly_df is None or weekly_df.empty:
             return None
         

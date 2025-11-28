@@ -42,3 +42,6 @@ Thumbs.db
 # Generated data files
 yahoo_fantasy_data/
 
+# Cache files
+yahoo_fantasy_cache/
+

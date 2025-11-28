@@ -81,8 +81,14 @@ def get_all_games_and_leagues():
     return games_with_leagues
 
 
-def load_data(league_key=None):
-    """Load fantasy league data for a specific league."""
+def load_data(league_key=None, force_refresh=False):
+    """Load fantasy league data for a specific league.
+    Uses cache for prior seasons automatically.
+    
+    Args:
+        league_key: Optional league key
+        force_refresh: If True, bypass cache and fetch from API
+    """
     global api_client, team_stats_df, weekly_df, league_info
     
     if api_client is None:
@@ -99,14 +105,14 @@ def load_data(league_key=None):
         if not league_key:
             raise Exception("No league key found")
     
-    # Get league info
-    league_info = api_client.get_league_info(league_key)
+    # Get league info (uses cache for prior seasons)
+    league_info = api_client.get_league_info(league_key, force_refresh=force_refresh)
     
-    # Get team stats DataFrame
-    team_stats_df = api_client.get_teams_stats_dataframe(league_key)
+    # Get team stats DataFrame (uses cache for prior seasons)
+    team_stats_df = api_client.get_teams_stats_dataframe(league_key, force_refresh=force_refresh)
     
-    # Get weekly DataFrame
-    weekly_df = api_client.get_weekly_dataframe(league_key)
+    # Get weekly DataFrame (uses cache for prior seasons)
+    weekly_df = api_client.get_weekly_dataframe(league_key, force_refresh=force_refresh)
     
     return league_info, team_stats_df, weekly_df, league_key
 
