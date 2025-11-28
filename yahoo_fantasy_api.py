@@ -1810,4 +1810,218 @@ class YahooFantasyAPI:
                 lines.append(f"  - {team_name} ({team_key})")
         
         return "\n".join(lines)
+    
+    # ==================== Playoff Stats Methods ====================
+    
+    def get_playoff_start_week(self, league_key: str) -> Optional[int]:
+        """
+        Get the playoff start week for a league.
+        
+        Args:
+            league_key: League key (e.g., '461.l.621700')
+            
+        Returns:
+            int: Playoff start week number, or None if not found
+        """
+        league_info = self.get_league_info(league_key)
+        if not league_info:
+            return None
+        
+        # Try to get from settings
+        settings = league_info.get('settings')
+        if settings:
+            # Settings can be a list or dict
+            if isinstance(settings, list) and len(settings) > 0:
+                settings_dict = settings[0] if isinstance(settings[0], dict) else {}
+            elif isinstance(settings, dict):
+                settings_dict = settings
+            else:
+                settings_dict = {}
+            
+            playoff_start = settings_dict.get('playoff_start_week')
+            if playoff_start:
+                try:
+                    return int(playoff_start)
+                except (ValueError, TypeError):
+                    pass
+        
+        # Try direct access from league_info
+        playoff_start = league_info.get('playoff_start_week')
+        if playoff_start:
+            try:
+                return int(playoff_start)
+            except (ValueError, TypeError):
+                pass
+        
+        return None
+    
+    def get_playoff_weekly_stats(self, league_key: str) -> List[Dict[str, Any]]:
+        """
+        Get weekly stats for all teams during playoff weeks only.
+        
+        Args:
+            league_key: League key (e.g., '461.l.621700')
+            
+        Returns:
+            list: List of weekly team stats dictionaries for playoff weeks
+        """
+        playoff_start_week = self.get_playoff_start_week(league_key)
+        if not playoff_start_week:
+            return []
+        
+        # Get league info to determine end week
+        league_info = self.get_league_info(league_key)
+        if not league_info:
+            return []
+        
+        current_week = int(league_info.get('current_week', 1))
+        end_week = int(league_info.get('end_week', current_week))
+        
+        # Get weekly stats starting from playoff week
+        return self.get_all_teams_weekly_stats(league_key, start_week=playoff_start_week, end_week=end_week)
+    
+    def get_playoff_weekly_dataframe(self, league_key: str) -> Optional['pd.DataFrame']:
+        """
+        Get weekly matchup data for playoff weeks only and return as a pandas DataFrame.
+        
+        Args:
+            league_key: League key (e.g., '461.l.621700')
+            
+        Returns:
+            pd.DataFrame: DataFrame containing weekly matchup data for playoff weeks, or None if pandas is not available
+        """
+        playoff_start_week = self.get_playoff_start_week(league_key)
+        if not playoff_start_week:
+            return None
+        
+        # Get league info to determine end week
+        league_info = self.get_league_info(league_key)
+        if not league_info:
+            return None
+        
+        current_week = int(league_info.get('current_week', 1))
+        end_week = int(league_info.get('end_week', current_week))
+        
+        # Get weekly data starting from playoff week
+        return self.get_weekly_dataframe(league_key, start_week=playoff_start_week, end_week=end_week)
+    
+    def get_playoff_scoreboard(self, league_key: str, week: Optional[int] = None) -> Dict[str, Any]:
+        """
+        Get league scoreboard/matchups for a specific playoff week.
+        
+        Args:
+            league_key: League key (e.g., '461.l.621700')
+            week: Playoff week number (default: current playoff week)
+            
+        Returns:
+            dict: Scoreboard/matchup data from API for the playoff week
+            
+        Raises:
+            Exception: If API call fails, response cannot be parsed, or week is not a playoff week
+        """
+        playoff_start_week = self.get_playoff_start_week(league_key)
+        if not playoff_start_week:
+            raise Exception("Could not determine playoff start week for this league")
+        
+        # If week is specified, verify it's a playoff week
+        if week and week < playoff_start_week:
+            raise Exception(f"Week {week} is not a playoff week. Playoffs start at week {playoff_start_week}")
+        
+        # Use the regular scoreboard method
+        return self.get_league_scoreboard(league_key, week)
+    
+    def get_team_playoff_stats(self, team_key: str, league_key: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Get cumulative playoff stats for a specific team.
+        Aggregates stats across all playoff weeks.
+        
+        Args:
+            team_key: Team key (e.g., '461.l.621700.t.1')
+            league_key: Optional league key to determine playoff weeks (if not provided, extracted from team_key)
+            
+        Returns:
+            dict: Aggregated playoff stats for the team
+        """
+        # Extract league_key from team_key if not provided
+        if not league_key:
+            # Team key format: game_key.league_key.team_key
+            parts = team_key.split('.')
+            if len(parts) >= 2:
+                league_key = '.'.join(parts[:2])
+            else:
+                raise Exception("Could not extract league_key from team_key")
+        
+        playoff_start_week = self.get_playoff_start_week(league_key)
+        if not playoff_start_week:
+            return {}
+        
+        # Get league info to determine end week
+        league_info = self.get_league_info(league_key)
+        if not league_info:
+            return {}
+        
+        current_week = int(league_info.get('current_week', 1))
+        end_week = int(league_info.get('end_week', current_week))
+        
+        # Aggregate stats across all playoff weeks
+        playoff_stats = {
+            'team_key': team_key,
+            'playoff_start_week': playoff_start_week,
+            'playoff_end_week': end_week,
+            'number_of_moves': 0,
+            'number_of_trades': 0,
+            'faab_spent': 0,
+            'faab_balance': 100,  # Starting balance
+            'weeks': []
+        }
+        
+        # Get stats for each playoff week
+        for week in range(playoff_start_week, min(end_week + 1, current_week + 1)):
+            week_stats = self.get_team_stats_by_week(team_key, week)
+            if week_stats:
+                playoff_stats['weeks'].append(week_stats)
+                # Aggregate cumulative stats (use the last week's cumulative values)
+                playoff_stats['number_of_moves'] = week_stats.get('number_of_moves', 0)
+                playoff_stats['number_of_trades'] = week_stats.get('number_of_trades', 0)
+                playoff_stats['faab_balance'] = week_stats.get('faab_balance', 100)
+        
+        # Calculate FAAB spent (starting - ending balance)
+        playoff_stats['faab_spent'] = 100 - playoff_stats['faab_balance']
+        
+        return playoff_stats
+    
+    def get_all_teams_playoff_stats(self, league_key: str) -> List[Dict[str, Any]]:
+        """
+        Get cumulative playoff stats for all teams in a league.
+        
+        Args:
+            league_key: League key (e.g., '461.l.621700')
+            
+        Returns:
+            list: List of aggregated playoff stats dictionaries for all teams
+        """
+        teams = self.get_league_teams(league_key)
+        if not teams:
+            return []
+        
+        playoff_stats_list = []
+        for team in teams:
+            if not isinstance(team, dict):
+                continue
+            
+            team_key = team.get('team_key')
+            if not team_key:
+                continue
+            
+            try:
+                team_playoff_stats = self.get_team_playoff_stats(team_key, league_key)
+                if team_playoff_stats:
+                    # Add team name
+                    team_playoff_stats['team_name'] = team.get('name', 'N/A')
+                    playoff_stats_list.append(team_playoff_stats)
+            except Exception as e:
+                import logging
+                logging.debug(f"Failed to get playoff stats for team {team_key}: {e}")
+        
+        return playoff_stats_list
 

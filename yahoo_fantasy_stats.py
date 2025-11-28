@@ -10,7 +10,9 @@ This script interacts with the Yahoo API to pull historic stats and data for a f
 
 import argparse
 import logging
+import os
 import sys
+from datetime import datetime
 from oauth import YahooOAuth
 from credentials import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
 from yahoo_fantasy_api import YahooFantasyAPI
@@ -268,6 +270,7 @@ def main():
                                     print(api.format_teams_list(teams))
                                     
                                     # Get team stats into pandas DataFrame
+                                    team_stats_df = None
                                     try:
                                         logging.info("Fetching team stats...")
                                         team_stats_df = api.get_teams_stats_dataframe(league_key)
@@ -283,6 +286,7 @@ def main():
                                         logging.warning(f"Failed to fetch team stats: {e}")
                                     
                                     # Get weekly data into pandas DataFrame
+                                    weekly_df = None
                                     try:
                                         logging.info("Fetching weekly matchup data...")
                                         weekly_df = api.get_weekly_dataframe(league_key)
@@ -296,6 +300,101 @@ def main():
                                         logging.warning(f"pandas not available: {e}")
                                     except Exception as e:
                                         logging.warning(f"Failed to fetch weekly data: {e}")
+                                    
+                                    # Get playoff weekly data into pandas DataFrame
+                                    playoff_weekly_df = None
+                                    try:
+                                        logging.info("Fetching playoff weekly matchup data...")
+                                        playoff_weekly_df = api.get_playoff_weekly_dataframe(league_key)
+                                        if playoff_weekly_df is not None and not playoff_weekly_df.empty:
+                                            logging.info(f"Successfully created playoff weekly DataFrame with {len(playoff_weekly_df)} matchup(s)")
+                                            print(f"\nPlayoff Weekly Matchup DataFrame:")
+                                            print(playoff_weekly_df.to_string())
+                                        else:
+                                            logging.debug("No playoff data available (may not be playoff season yet)")
+                                    except ImportError as e:
+                                        logging.warning(f"pandas not available: {e}")
+                                    except Exception as e:
+                                        logging.debug(f"Failed to fetch playoff weekly data: {e}")
+                                    
+                                    # Get weekly team stats (moves, trades, FAAB by week)
+                                    weekly_team_stats_df = None
+                                    try:
+                                        logging.info("Fetching weekly team stats (moves, trades, FAAB)...")
+                                        weekly_team_stats = api.get_all_teams_weekly_stats(league_key)
+                                        if weekly_team_stats:
+                                            try:
+                                                import pandas as pd
+                                                weekly_team_stats_df = pd.DataFrame(weekly_team_stats)
+                                                if weekly_team_stats_df is not None and not weekly_team_stats_df.empty:
+                                                    logging.info(f"Successfully created weekly team stats DataFrame with {len(weekly_team_stats_df)} row(s)")
+                                                    print(f"\nWeekly Team Stats DataFrame:")
+                                                    print(weekly_team_stats_df.to_string())
+                                            except ImportError:
+                                                logging.debug("pandas not available for weekly team stats DataFrame")
+                                    except Exception as e:
+                                        logging.debug(f"Failed to fetch weekly team stats: {e}")
+                                    
+                                    # Save all dataframes as CSV files
+                                    try:
+                                        # Create output directory
+                                        output_dir = "yahoo_fantasy_data"
+                                        os.makedirs(output_dir, exist_ok=True)
+                                        
+                                        # Generate timestamp for filenames
+                                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                        
+                                        # Get league name for filename (sanitize for filesystem)
+                                        league_name = first_league.get('name', 'league')
+                                        league_name_safe = "".join(c for c in league_name if c.isalnum() or c in (' ', '-', '_')).rstrip()
+                                        league_name_safe = league_name_safe.replace(' ', '_')
+                                        
+                                        saved_files = []
+                                        
+                                        # Save team stats DataFrame
+                                        if team_stats_df is not None and not team_stats_df.empty:
+                                            filename = f"{league_name_safe}_team_stats_{timestamp}.csv"
+                                            filepath = os.path.join(output_dir, filename)
+                                            team_stats_df.to_csv(filepath, index=False)
+                                            saved_files.append(filepath)
+                                            logging.info(f"Saved team stats to: {filepath}")
+                                            print(f"\n✓ Saved team stats to: {filepath}")
+                                        
+                                        # Save weekly matchup DataFrame
+                                        if weekly_df is not None and not weekly_df.empty:
+                                            filename = f"{league_name_safe}_weekly_matchups_{timestamp}.csv"
+                                            filepath = os.path.join(output_dir, filename)
+                                            weekly_df.to_csv(filepath, index=False)
+                                            saved_files.append(filepath)
+                                            logging.info(f"Saved weekly matchups to: {filepath}")
+                                            print(f"✓ Saved weekly matchups to: {filepath}")
+                                        
+                                        # Save playoff weekly matchup DataFrame
+                                        if playoff_weekly_df is not None and not playoff_weekly_df.empty:
+                                            filename = f"{league_name_safe}_playoff_weekly_matchups_{timestamp}.csv"
+                                            filepath = os.path.join(output_dir, filename)
+                                            playoff_weekly_df.to_csv(filepath, index=False)
+                                            saved_files.append(filepath)
+                                            logging.info(f"Saved playoff weekly matchups to: {filepath}")
+                                            print(f"✓ Saved playoff weekly matchups to: {filepath}")
+                                        
+                                        # Save weekly team stats DataFrame (moves, trades, FAAB)
+                                        if weekly_team_stats_df is not None and not weekly_team_stats_df.empty:
+                                            filename = f"{league_name_safe}_weekly_team_stats_{timestamp}.csv"
+                                            filepath = os.path.join(output_dir, filename)
+                                            weekly_team_stats_df.to_csv(filepath, index=False)
+                                            saved_files.append(filepath)
+                                            logging.info(f"Saved weekly team stats to: {filepath}")
+                                            print(f"✓ Saved weekly team stats to: {filepath}")
+                                        
+                                        if saved_files:
+                                            print(f"\nAll dataframes saved to '{output_dir}' directory")
+                                        else:
+                                            logging.warning("No dataframes available to save")
+                                            
+                                    except Exception as e:
+                                        logging.error(f"Failed to save dataframes to CSV: {e}", exc_info=True)
+                                        print(f"\n⚠ Warning: Failed to save dataframes to CSV: {e}")
                                 else:
                                     logging.warning("No teams found or error extracting teams")
         

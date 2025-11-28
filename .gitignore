@@ -39,3 +39,6 @@ wheels/
 .DS_Store
 Thumbs.db
 
+# Generated data files
+yahoo_fantasy_data/
+
