@@ -171,6 +171,85 @@
             width: 100%;
             height: 400px;
         }
+        
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+            border-bottom: 2px solid #e0e0e0;
+        }
+        
+        .tab-button {
+            padding: 12px 24px;
+            background: transparent;
+            border: none;
+            border-bottom: 3px solid transparent;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            color: #666;
+            transition: all 0.3s;
+        }
+        
+        .tab-button:hover {
+            color: #667eea;
+        }
+        
+        .tab-button.active {
+            color: #667eea;
+            border-bottom-color: #667eea;
+        }
+        
+        .tab-content {
+            display: none;
+        }
+        
+        .tab-content.active {
+            display: block;
+        }
+        
+        .aggregate-controls {
+            background: #f8f9fa;
+            padding: 20px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        
+        .aggregate-controls input {
+            padding: 10px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 14px;
+            width: 300px;
+            margin-right: 10px;
+        }
+        
+        .aggregate-controls button {
+            padding: 10px 20px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: background 0.3s;
+        }
+        
+        .aggregate-controls button:hover {
+            background: #5568d3;
+        }
+        
+        .aggregate-controls button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        
+        .loading-message {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
     </style>
 </head>
 <body>
@@ -199,6 +278,12 @@
             </div>
         </div>
         
+        <div class="tabs">
+            <button class="tab-button active" onclick="switchTab('current-league', event)">Current League</button>
+            <button class="tab-button" onclick="switchTab('aggregate', event)">Aggregate Standings</button>
+        </div>
+        
+        <div id="current-league-tab" class="tab-content active">
         <div class="section">
             <h2>Team Standings</h2>
             <div class="table-container">
@@ -260,6 +345,33 @@
             
             <div class="chart-container">
                 <div id="cumulative-beat-percentage-chart" class="plotly-chart"></div>
+            </div>
+        </div>
+        </div>
+        
+        <div id="aggregate-tab" class="tab-content">
+            <div class="section">
+                <h2>Aggregate Standings Across Multiple Leagues</h2>
+                
+                <div class="aggregate-controls">
+                    <label for="league-regex">League Name Filter (Regex):</label>
+                    <input type="text" id="league-regex" placeholder="e.g., .*League.* or ^My League$" value=".*">
+                    <button id="load-aggregate-btn" onclick="loadAggregateStandings()">Load Aggregate Stats</button>
+                    <span id="aggregate-status" style="margin-left: 15px; color: #666;"></span>
+                </div>
+                
+                <div id="aggregate-loading" class="loading-message" style="display: none;">
+                    Loading aggregate standings...
+                </div>
+                
+                <div id="aggregate-table-container" class="table-container" style="display: none;">
+                    <table id="aggregate-table">
+                        <thead>
+                            <tr id="aggregate-header"></tr>
+                        </thead>
+                        <tbody id="aggregate-body"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
     </div>
@@ -456,9 +568,49 @@
             const header = document.getElementById('teams-header');
             const body = document.getElementById('teams-body');
             
-            // Get headers and reorder: manager_nickname first, exclude team_key
+            // Define specific column order for standings table
+            const preferredOrder = [
+                'manager_nickname',
+                'team_name',
+                'rank',
+                'wins',
+                'losses',
+                'ties',
+                'win_percentage',
+                'points_for',
+                'points_against',
+                'expected_wins',
+                'expected_losses',
+                'expected_win_percentage',
+                'win_percentage_difference',
+                'number_of_moves',
+                'number_of_trades',
+                'faab_balance',
+                'draft_grade',
+                'team_id'
+            ];
+            
+            // Get all available headers
             const allHeaders = Object.keys(data[0]);
-            const headers = ['manager_nickname', ...allHeaders.filter(h => h !== 'manager_nickname' && h !== 'team_key')];
+            
+            // Build headers array: preferred order first, then any remaining columns
+            const headers = [];
+            const usedHeaders = new Set();
+            
+            // Add columns in preferred order (if they exist in data)
+            preferredOrder.forEach(col => {
+                if (allHeaders.includes(col) && col !== 'team_key') {
+                    headers.push(col);
+                    usedHeaders.add(col);
+                }
+            });
+            
+            // Add any remaining columns not in preferred order (excluding team_key)
+            allHeaders.forEach(col => {
+                if (!usedHeaders.has(col) && col !== 'team_key') {
+                    headers.push(col);
+                }
+            });
             
             header.innerHTML = headers.map(h => `<th>${h.replace(/_/g, ' ').toUpperCase()}</th>`).join('');
             
@@ -1232,6 +1384,152 @@
             };
             
             Plotly.newPlot('cumulative-beat-percentage-chart', traces, layout, {responsive: true});
+        }
+        
+        // Tab switching function
+        function switchTab(tabName, event) {
+            // Hide all tabs
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-button').forEach(btn => {
+                btn.classList.remove('active');
+            });
+            
+            // Show selected tab
+            document.getElementById(`${tabName}-tab`).classList.add('active');
+            if (event && event.target) {
+                event.target.classList.add('active');
+            } else {
+                // Fallback: find the button by text content
+                document.querySelectorAll('.tab-button').forEach(btn => {
+                    if (btn.textContent.includes(tabName === 'current-league' ? 'Current League' : 'Aggregate')) {
+                        btn.classList.add('active');
+                    }
+                });
+            }
+        }
+        
+        // Load aggregate standings
+        function loadAggregateStandings() {
+            const regexPattern = document.getElementById('league-regex').value;
+            const statusSpan = document.getElementById('aggregate-status');
+            const loadingDiv = document.getElementById('aggregate-loading');
+            const tableContainer = document.getElementById('aggregate-table-container');
+            const loadBtn = document.getElementById('load-aggregate-btn');
+            
+            if (!regexPattern) {
+                statusSpan.textContent = 'Please enter a regex pattern';
+                statusSpan.style.color = '#d32f2f';
+                return;
+            }
+            
+            // Show loading state
+            loadBtn.disabled = true;
+            loadingDiv.style.display = 'block';
+            tableContainer.style.display = 'none';
+            statusSpan.textContent = 'Loading...';
+            statusSpan.style.color = '#666';
+            
+            // Fetch aggregate data
+            fetch(`/api/aggregate-standings?league_regex=${encodeURIComponent(regexPattern)}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    // Display aggregate standings
+                    displayAggregateStandings(data.standings);
+                    statusSpan.textContent = `Loaded ${data.leagues_count} league(s)`;
+                    statusSpan.style.color = '#4caf50';
+                    loadingDiv.style.display = 'none';
+                    tableContainer.style.display = 'block';
+                })
+                .catch(error => {
+                    console.error('Error loading aggregate standings:', error);
+                    statusSpan.textContent = `Error: ${error.message}`;
+                    statusSpan.style.color = '#d32f2f';
+                    loadingDiv.style.display = 'none';
+                })
+                .finally(() => {
+                    loadBtn.disabled = false;
+                });
+        }
+        
+        // Display aggregate standings table
+        function displayAggregateStandings(data) {
+            if (!data || data.length === 0) {
+                document.getElementById('aggregate-body').innerHTML = '<tr><td colspan="10" style="text-align: center; padding: 40px;">No data available</td></tr>';
+                return;
+            }
+            
+            const header = document.getElementById('aggregate-header');
+            const body = document.getElementById('aggregate-body');
+            
+            // Define specific column order for aggregate standings table
+            const preferredOrder = [
+                'manager_nickname',
+                'team_name',
+                'leagues_played',
+                'total_wins',
+                'total_losses',
+                'total_ties',
+                'total_games',
+                'avg_win_percentage',
+                'total_points_for',
+                'total_points_against',
+                'avg_points_for',
+                'avg_points_against',
+                'total_expected_wins',
+                'total_expected_losses',
+                'avg_expected_win_percentage',
+                'win_percentage_difference',
+                'total_number_of_moves',
+                'total_number_of_trades',
+                'avg_moves_per_league',
+                'avg_trades_per_league'
+            ];
+            
+            // Get all available headers
+            const allHeaders = Object.keys(data[0]);
+            
+            // Build headers array: preferred order first, then any remaining columns
+            const headers = [];
+            const usedHeaders = new Set();
+            
+            // Add columns in preferred order (if they exist in data)
+            preferredOrder.forEach(col => {
+                if (allHeaders.includes(col) && col !== 'team_key') {
+                    headers.push(col);
+                    usedHeaders.add(col);
+                }
+            });
+            
+            // Add any remaining columns not in preferred order (excluding team_key)
+            allHeaders.forEach(col => {
+                if (!usedHeaders.has(col) && col !== 'team_key') {
+                    headers.push(col);
+                }
+            });
+            
+            header.innerHTML = headers.map(h => `<th>${h.replace(/_/g, ' ').toUpperCase()}</th>`).join('');
+            
+            // Sort by total wins (descending), then by win percentage
+            const sortedData = [...data].sort((a, b) => {
+                const winsA = parseFloat(a.total_wins) || 0;
+                const winsB = parseFloat(b.total_wins) || 0;
+                if (winsB !== winsA) {
+                    return winsB - winsA;
+                }
+                const wpctA = parseFloat(a.avg_win_percentage) || 0;
+                const wpctB = parseFloat(b.avg_win_percentage) || 0;
+                return wpctB - wpctA;
+            });
+            
+            body.innerHTML = sortedData.map(row => 
+                `<tr>${headers.map(h => `<td>${row[h] !== undefined && row[h] !== null ? row[h] : 'N/A'}</td>`).join('')}</tr>`
+            ).join('');
         }
         
         // Initialize dropdowns first

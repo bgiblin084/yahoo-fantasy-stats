@@ -7,6 +7,8 @@ Author: Braedon Giblin
 from flask import Flask, render_template, jsonify, request
 import logging
 import json
+import re
+from collections import defaultdict
 from oauth import YahooOAuth
 from credentials import CLIENT_ID, CLIENT_SECRET, REDIRECT_URI
 from yahoo_fantasy_api import YahooFantasyAPI
@@ -218,6 +220,151 @@ def api_weekly():
         return jsonify([])
     except Exception as e:
         logging.error(f"Error fetching weekly data: {e}")
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/aggregate-standings')
+def api_aggregate_standings():
+    """API endpoint for aggregate standings across multiple leagues."""
+    try:
+        league_regex = request.args.get('league_regex', '.*')
+        
+        if not league_regex:
+            return jsonify({'error': 'league_regex parameter required'}), 400
+        
+        # Initialize API if needed
+        if api_client is None:
+            initialize_api()
+        
+        # Get all games and leagues
+        games_with_leagues = get_all_games_and_leagues()
+        
+        # Filter leagues by regex pattern
+        matching_leagues = []
+        try:
+            pattern = re.compile(league_regex, re.IGNORECASE)
+        except re.error as e:
+            return jsonify({'error': f'Invalid regex pattern: {e}'}), 400
+        
+        for game in games_with_leagues:
+            for league in game.get('leagues', []):
+                league_name = league.get('name', '')
+                if pattern.search(league_name):
+                    matching_leagues.append({
+                        'league_key': league.get('league_key'),
+                        'league_name': league_name,
+                        'season': game.get('season'),
+                        'game_name': game.get('game_name')
+                    })
+        
+        if not matching_leagues:
+            return jsonify({
+                'standings': [],
+                'leagues_count': 0,
+                'message': 'No leagues found matching the regex pattern'
+            })
+        
+        # Aggregate stats by manager nickname (assuming same manager across leagues)
+        aggregated_stats = defaultdict(lambda: {
+            'manager_nickname': '',
+            'team_names': [],  # Collect all team names for this manager
+            'total_wins': 0,
+            'total_losses': 0,
+            'total_ties': 0,
+            'total_points_for': 0.0,
+            'total_points_against': 0.0,
+            'leagues_played': 0,
+            'total_expected_wins': 0.0,
+            'total_expected_losses': 0.0,
+            'total_number_of_moves': 0,
+            'total_number_of_trades': 0
+        })
+        
+        # Process each matching league
+        for league_info in matching_leagues:
+            league_key = league_info['league_key']
+            try:
+                # Get team stats for this league
+                team_stats_df = api_client.get_teams_stats_dataframe(league_key)
+                if team_stats_df is None or team_stats_df.empty:
+                    continue
+                
+                # Aggregate by manager nickname
+                for _, row in team_stats_df.iterrows():
+                    manager = row.get('manager_nickname', 'N/A')
+                    if manager == 'N/A' or not manager:
+                        continue
+                    
+                    # Initialize if first time seeing this manager
+                    if aggregated_stats[manager]['manager_nickname'] == '':
+                        aggregated_stats[manager]['manager_nickname'] = manager
+                    
+                    # Collect team name
+                    team_name = row.get('team_name', 'N/A')
+                    if team_name != 'N/A' and team_name and team_name not in aggregated_stats[manager]['team_names']:
+                        aggregated_stats[manager]['team_names'].append(team_name)
+                    
+                    # Aggregate stats
+                    aggregated_stats[manager]['total_wins'] += int(row.get('wins', 0)) if str(row.get('wins', 0)) != 'N/A' else 0
+                    aggregated_stats[manager]['total_losses'] += int(row.get('losses', 0)) if str(row.get('losses', 0)) != 'N/A' else 0
+                    aggregated_stats[manager]['total_ties'] += int(row.get('ties', 0)) if str(row.get('ties', 0)) != 'N/A' else 0
+                    aggregated_stats[manager]['total_points_for'] += float(row.get('points_for', 0)) if str(row.get('points_for', 0)) != 'N/A' else 0.0
+                    aggregated_stats[manager]['total_points_against'] += float(row.get('points_against', 0)) if str(row.get('points_against', 0)) != 'N/A' else 0.0
+                    aggregated_stats[manager]['total_expected_wins'] += float(row.get('expected_wins', 0)) if str(row.get('expected_wins', 0)) != 'N/A' else 0.0
+                    aggregated_stats[manager]['total_expected_losses'] += float(row.get('expected_losses', 0)) if str(row.get('expected_losses', 0)) != 'N/A' else 0.0
+                    aggregated_stats[manager]['total_number_of_moves'] += int(row.get('number_of_moves', 0)) if str(row.get('number_of_moves', 0)) != 'N/A' else 0
+                    aggregated_stats[manager]['total_number_of_trades'] += int(row.get('number_of_trades', 0)) if str(row.get('number_of_trades', 0)) != 'N/A' else 0
+                    aggregated_stats[manager]['leagues_played'] += 1
+                    
+            except Exception as e:
+                logging.warning(f"Error processing league {league_key}: {e}")
+                continue
+        
+        # Convert to list and calculate derived stats
+        standings_list = []
+        for manager, stats in aggregated_stats.items():
+            total_games = stats['total_wins'] + stats['total_losses'] + stats['total_ties']
+            avg_win_percentage = (stats['total_wins'] / total_games * 100) if total_games > 0 else 0.0
+            
+            total_expected_games = stats['total_expected_wins'] + stats['total_expected_losses']
+            avg_expected_win_percentage = (stats['total_expected_wins'] / total_expected_games * 100) if total_expected_games > 0 else 0.0
+            
+            win_pct_diff = avg_win_percentage - avg_expected_win_percentage
+            
+            # Get team name(s) - use first one, or join if multiple
+            team_names = stats.get('team_names', [])
+            team_name_display = ', '.join(team_names) if team_names else 'N/A'
+            
+            standings_list.append({
+                'manager_nickname': stats['manager_nickname'],
+                'team_name': team_name_display,
+                'leagues_played': stats['leagues_played'],
+                'total_wins': stats['total_wins'],
+                'total_losses': stats['total_losses'],
+                'total_ties': stats['total_ties'],
+                'total_games': total_games,
+                'avg_win_percentage': round(avg_win_percentage, 3),
+                'total_points_for': round(stats['total_points_for'], 2),
+                'total_points_against': round(stats['total_points_against'], 2),
+                'avg_points_for': round(stats['total_points_for'] / stats['leagues_played'], 2) if stats['leagues_played'] > 0 else 0.0,
+                'avg_points_against': round(stats['total_points_against'] / stats['leagues_played'], 2) if stats['leagues_played'] > 0 else 0.0,
+                'total_expected_wins': round(stats['total_expected_wins'], 1),
+                'total_expected_losses': round(stats['total_expected_losses'], 1),
+                'avg_expected_win_percentage': round(avg_expected_win_percentage, 3),
+                'win_percentage_difference': round(win_pct_diff, 3),
+                'total_number_of_moves': stats['total_number_of_moves'],
+                'total_number_of_trades': stats['total_number_of_trades'],
+                'avg_moves_per_league': round(stats['total_number_of_moves'] / stats['leagues_played'], 1) if stats['leagues_played'] > 0 else 0.0,
+                'avg_trades_per_league': round(stats['total_number_of_trades'] / stats['leagues_played'], 1) if stats['leagues_played'] > 0 else 0.0
+            })
+        
+        return jsonify({
+            'standings': standings_list,
+            'leagues_count': len(matching_leagues)
+        })
+        
+    except Exception as e:
+        logging.error(f"Error fetching aggregate standings: {e}", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 
