@@ -942,10 +942,72 @@ class YahooFantasyAPI:
         except ValueError as e:
             raise Exception(f"Failed to parse JSON response. Status: {response.status_code}, Response: {response.text[:200]}")
     
+    def _calculate_expected_wins_losses(self, league_key: str) -> Dict[str, Dict[str, float]]:
+        """
+        Calculate expected wins and losses for each team based on record percentage vs all.
+        An expected win is when record_percentage_vs_all > 50%, expected loss when < 50%.
+        Only includes completed weeks (excludes current week and future weeks).
+        
+        Args:
+            league_key: League key (e.g., '461.l.621700')
+            
+        Returns:
+            dict: Dictionary mapping team_key -> {'expected_wins': float, 'expected_losses': float}
+        """
+        expected_stats = {}
+        
+        # Get league info to determine current week (incomplete weeks)
+        league_info = self.get_league_info(league_key)
+        current_week = None
+        if league_info:
+            try:
+                current_week = int(league_info.get('current_week', 1))
+            except (ValueError, TypeError):
+                current_week = None
+        
+        # Get weekly performance data
+        weekly_performance_df = self.get_weekly_team_performance_dataframe(league_key)
+        if weekly_performance_df is None or weekly_performance_df.empty:
+            return expected_stats
+        
+        # Filter out incomplete weeks (current week and future weeks)
+        if current_week is not None:
+            weekly_performance_df = weekly_performance_df[weekly_performance_df['week'] < current_week]
+        
+        if weekly_performance_df.empty:
+            return expected_stats
+        
+        # Initialize expected stats for all teams
+        for _, row in weekly_performance_df.iterrows():
+            team_key = row.get('team_key')
+            if team_key and team_key not in expected_stats:
+                expected_stats[team_key] = {'expected_wins': 0.0, 'expected_losses': 0.0}
+        
+        # Calculate expected wins/losses per week (only for completed weeks)
+        for _, row in weekly_performance_df.iterrows():
+            team_key = row.get('team_key')
+            record_pct = row.get('record_percentage_vs_all', 0.0)
+            
+            try:
+                record_pct = float(record_pct)
+            except (ValueError, TypeError):
+                record_pct = 0.0
+            
+            if team_key and team_key in expected_stats:
+                if record_pct > 50.0:
+                    expected_stats[team_key]['expected_wins'] += 1.0
+                elif record_pct < 50.0:
+                    expected_stats[team_key]['expected_losses'] += 1.0
+                # If exactly 50%, don't count as either (or could count as 0.5 each)
+                # For now, we'll leave it as 0 for both
+        
+        return expected_stats
+    
     def get_teams_stats_dataframe(self, league_key: str) -> Optional['pd.DataFrame']:
         """
         Get all team stats for a league and return as a pandas DataFrame.
         Uses standings endpoint which includes team stats and standings information.
+        Also includes expected wins and losses based on record percentage vs all.
         
         Args:
             league_key: League key (e.g., '461.l.621700')
@@ -962,6 +1024,47 @@ class YahooFantasyAPI:
             team_stats_list = self._parse_standings(standings_data)
             if team_stats_list:
                 df = pd.DataFrame(team_stats_list)
+                
+                # Add expected wins and losses
+                expected_stats = self._calculate_expected_wins_losses(league_key)
+                # Initialize columns with 0.0 for all teams
+                df['expected_wins'] = 0.0
+                df['expected_losses'] = 0.0
+                df['expected_win_percentage'] = 0.0
+                df['win_percentage_difference'] = 0.0
+                
+                if expected_stats:
+                    # Update with calculated values
+                    for team_key, stats in expected_stats.items():
+                        mask = df['team_key'] == team_key
+                        expected_wins = round(stats.get('expected_wins', 0.0), 1)
+                        expected_losses = round(stats.get('expected_losses', 0.0), 1)
+                        
+                        df.loc[mask, 'expected_wins'] = expected_wins
+                        df.loc[mask, 'expected_losses'] = expected_losses
+                        
+                        # Calculate expected win percentage
+                        total_expected_games = expected_wins + expected_losses
+                        if total_expected_games > 0:
+                            expected_win_pct = (expected_wins / total_expected_games) * 100
+                            df.loc[mask, 'expected_win_percentage'] = round(expected_win_pct, 3)
+                        
+                        # Calculate difference between actual and expected win percentage
+                        actual_win_pct = df.loc[mask, 'win_percentage'].values
+                        if len(actual_win_pct) > 0:
+                            try:
+                                actual_win_pct_val = float(actual_win_pct[0])
+                                # Convert to percentage if stored as decimal (0.0-1.0)
+                                if actual_win_pct_val <= 1.0:
+                                    actual_win_pct_val = actual_win_pct_val * 100
+                                
+                                if total_expected_games > 0:
+                                    expected_win_pct_val = (expected_wins / total_expected_games) * 100
+                                    difference = actual_win_pct_val - expected_win_pct_val
+                                    df.loc[mask, 'win_percentage_difference'] = round(difference, 3)
+                            except (ValueError, TypeError):
+                                pass
+                
                 return df
             else:
                 import logging
@@ -1001,6 +1104,20 @@ class YahooFantasyAPI:
         
         # Create DataFrame
         df = pd.DataFrame(team_stats_list)
+        
+        # Add expected wins and losses
+        expected_stats = self._calculate_expected_wins_losses(league_key)
+        # Initialize columns with 0.0 for all teams
+        df['expected_wins'] = 0.0
+        df['expected_losses'] = 0.0
+        
+        if expected_stats:
+            # Update with calculated values
+            for team_key, stats in expected_stats.items():
+                mask = df['team_key'] == team_key
+                df.loc[mask, 'expected_wins'] = round(stats.get('expected_wins', 0.0), 1)
+                df.loc[mask, 'expected_losses'] = round(stats.get('expected_losses', 0.0), 1)
+        
         return df
     
     # ==================== Private Parsing Methods ====================
@@ -1471,6 +1588,10 @@ class YahooFantasyAPI:
         
         # Create DataFrame
         df = pd.DataFrame(weekly_data_list)
+        
+        # Add record_percentage_vs_all column (percentage of teams each team would beat that week)
+        df = self._add_record_percentage_vs_all_to_weekly_df(df)
+        
         return df
     
     def _parse_scoreboard(self, scoreboard_data: Dict[str, Any], week: int) -> List[Dict[str, Any]]:
@@ -1603,6 +1724,171 @@ class YahooFantasyAPI:
                             })
         
         return matchups_list
+    
+    def _add_record_percentage_vs_all_to_weekly_df(self, df: 'pd.DataFrame') -> 'pd.DataFrame':
+        """
+        Add a record_percentage_vs_all column to weekly dataframe.
+        This calculates what percentage of teams each team would beat in a given week.
+        
+        Args:
+            df: Weekly matchup DataFrame with columns: week, team1_key, team1_points, team2_key, team2_points
+            
+        Returns:
+            pd.DataFrame: DataFrame with record_percentage_vs_all column added
+        """
+        if df.empty:
+            return df
+        
+        # Create a list to store team-week records with points
+        team_week_points = []
+        
+        # Extract all team points by week from the matchup dataframe
+        for _, row in df.iterrows():
+            week = row.get('week')
+            team1_key = row.get('team1_key')
+            team1_points = row.get('team1_points')
+            team2_key = row.get('team2_key')
+            team2_points = row.get('team2_points')
+            
+            # Convert points to float, handling 'N/A' and other non-numeric values
+            try:
+                team1_pts = float(str(team1_points).replace('N/A', '0')) if team1_points != 'N/A' else 0.0
+            except (ValueError, TypeError):
+                team1_pts = 0.0
+            
+            try:
+                team2_pts = float(str(team2_points).replace('N/A', '0')) if team2_points != 'N/A' else 0.0
+            except (ValueError, TypeError):
+                team2_pts = 0.0
+            
+            team_week_points.append({
+                'week': week,
+                'team_key': team1_key,
+                'points': team1_pts
+            })
+            team_week_points.append({
+                'week': week,
+                'team_key': team2_key,
+                'points': team2_pts
+            })
+        
+        # Create a DataFrame from team-week points
+        team_points_df = pd.DataFrame(team_week_points)
+        
+        # Calculate record percentage vs all for each team-week combination
+        record_percentages = []
+        
+        for week in team_points_df['week'].unique():
+            week_data = team_points_df[team_points_df['week'] == week]
+            week_points = week_data['points'].values
+            total_teams = len(week_points)
+            
+            if total_teams == 0:
+                continue
+            
+            # For each team in this week, calculate percentage of teams they would beat
+            for _, team_row in week_data.iterrows():
+                team_key = team_row['team_key']
+                team_points = team_row['points']
+                
+                # Count how many teams this team would beat (strictly greater)
+                teams_beaten = sum(1 for pts in week_points if team_points > pts)
+                
+                # Calculate percentage (excluding the team itself from denominator)
+                # If only one team, set to 0% or handle edge case
+                if total_teams <= 1:
+                    record_pct = 0.0
+                else:
+                    record_pct = (teams_beaten / (total_teams - 1)) * 100
+                
+                record_percentages.append({
+                    'week': week,
+                    'team_key': team_key,
+                    'record_percentage_vs_all': record_pct
+                })
+        
+        # Create DataFrame with record percentages
+        record_pct_df = pd.DataFrame(record_percentages)
+        
+        # Add record_percentage_vs_all to original dataframe
+        # We need to add it for both team1 and team2 in each matchup row
+        df['team1_record_percentage_vs_all'] = 0.0
+        df['team2_record_percentage_vs_all'] = 0.0
+        
+        for idx, row in df.iterrows():
+            week = row.get('week')
+            team1_key = row.get('team1_key')
+            team2_key = row.get('team2_key')
+            
+            # Get record percentage vs all for team1
+            team1_record = record_pct_df[
+                (record_pct_df['week'] == week) & 
+                (record_pct_df['team_key'] == team1_key)
+            ]
+            if not team1_record.empty:
+                df.at[idx, 'team1_record_percentage_vs_all'] = team1_record.iloc[0]['record_percentage_vs_all']
+            
+            # Get record percentage vs all for team2
+            team2_record = record_pct_df[
+                (record_pct_df['week'] == week) & 
+                (record_pct_df['team_key'] == team2_key)
+            ]
+            if not team2_record.empty:
+                df.at[idx, 'team2_record_percentage_vs_all'] = team2_record.iloc[0]['record_percentage_vs_all']
+        
+        return df
+    
+    def get_weekly_team_performance_dataframe(self, league_key: str, start_week: Optional[int] = None, end_week: Optional[int] = None) -> Optional['pd.DataFrame']:
+        """
+        Get weekly performance data for all teams with points and record percentage vs all.
+        Returns one row per team per week.
+        
+        Args:
+            league_key: League key (e.g., '461.l.621700')
+            start_week: Starting week number (default: 1)
+            end_week: Ending week number (default: current week from league info)
+            
+        Returns:
+            pd.DataFrame: DataFrame with columns: week, team_key, team_name, points, record_percentage_vs_all
+        """
+        if not PANDAS_AVAILABLE:
+            raise ImportError("pandas is required for this functionality. Install it with: pip install pandas")
+        
+        # Get the weekly matchup dataframe
+        weekly_df = self.get_weekly_dataframe(league_key, start_week, end_week)
+        if weekly_df is None or weekly_df.empty:
+            return None
+        
+        # Extract team-week records with points and record percentage vs all
+        team_performance_list = []
+        
+        for _, row in weekly_df.iterrows():
+            week = row.get('week')
+            
+            # Team 1
+            team_performance_list.append({
+                'week': week,
+                'team_key': row.get('team1_key'),
+                'team_name': row.get('team1_name'),
+                'points': row.get('team1_points'),
+                'record_percentage_vs_all': row.get('team1_record_percentage_vs_all', 0.0)
+            })
+            
+            # Team 2
+            team_performance_list.append({
+                'week': week,
+                'team_key': row.get('team2_key'),
+                'team_name': row.get('team2_name'),
+                'points': row.get('team2_points'),
+                'record_percentage_vs_all': row.get('team2_record_percentage_vs_all', 0.0)
+            })
+        
+        # Create DataFrame and remove duplicates (in case a team appears multiple times in a week)
+        df = pd.DataFrame(team_performance_list)
+        df = df.drop_duplicates(subset=['week', 'team_key'], keep='first')
+        df = df.sort_values(['week', 'record_percentage_vs_all'], ascending=[True, False])
+        
+        return df
     
     def _extract_team_from_matchup(self, team_raw: Any) -> Optional[Dict[str, Any]]:
         """

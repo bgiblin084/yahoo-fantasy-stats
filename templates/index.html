@@ -32,6 +32,48 @@
             box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         }
         
+        .league-selector {
+            display: flex;
+            gap: 15px;
+            align-items: center;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+        
+        .selector-group {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+        
+        .selector-group label {
+            font-size: 12px;
+            color: #666;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+        
+        .selector-group select {
+            padding: 10px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 5px;
+            font-size: 14px;
+            background: white;
+            cursor: pointer;
+            min-width: 200px;
+            transition: border-color 0.3s;
+        }
+        
+        .selector-group select:hover {
+            border-color: #667eea;
+        }
+        
+        .selector-group select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+        
         .header h1 {
             color: #333;
             margin-bottom: 10px;
@@ -136,6 +178,22 @@
         <div class="header">
             <h1 id="league-name">🏈 Yahoo Fantasy Stats Dashboard</h1>
             <p id="league-description">Loading league information...</p>
+            
+            <div class="league-selector">
+                <div class="selector-group">
+                    <label for="game-selector">Season/Year</label>
+                    <select id="game-selector">
+                        <option value="">Loading...</option>
+                    </select>
+                </div>
+                <div class="selector-group">
+                    <label for="league-selector">League</label>
+                    <select id="league-selector">
+                        <option value="">Select a season first</option>
+                    </select>
+                </div>
+            </div>
+            
             <div class="league-info" id="league-info">
                 <!-- League info will be populated here -->
             </div>
@@ -195,15 +253,177 @@
             <div class="chart-container">
                 <div id="cumulative-points-chart" class="plotly-chart"></div>
             </div>
+            
+            <div class="chart-container">
+                <div id="beat-percentage-chart" class="plotly-chart"></div>
+            </div>
+            
+            <div class="chart-container">
+                <div id="cumulative-beat-percentage-chart" class="plotly-chart"></div>
+            </div>
         </div>
     </div>
     
     <script>
         // Parse data from server
-        const teamsData = {{ teams_data|safe }};
-        const weeklyData = {{ weekly_data|safe }};
-        const weeklyStatsData = {{ weekly_stats_data|safe }};
-        const leagueInfo = {{ league_info|tojson|safe }};
+        let teamsData = {{ teams_data|safe }};
+        let weeklyData = {{ weekly_data|safe }};
+        let weeklyStatsData = {{ weekly_stats_data|safe }};
+        let weeklyPerformanceData = {{ weekly_performance_data|safe }};
+        let leagueInfo = {{ league_info|tojson|safe }};
+        const gamesLeaguesData = {{ games_leagues_data|safe }};
+        const selectedLeagueKey = '{{ selected_league_key|safe }}';
+        
+        // Initialize dropdowns
+        function initializeDropdowns() {
+            const gameSelector = document.getElementById('game-selector');
+            const leagueSelector = document.getElementById('league-selector');
+            
+            if (!gamesLeaguesData || gamesLeaguesData.length === 0) {
+                gameSelector.innerHTML = '<option value="">No games found</option>';
+                return;
+            }
+            
+            // Populate game selector
+            gameSelector.innerHTML = '<option value="">Select a season...</option>';
+            gamesLeaguesData.forEach((game, index) => {
+                const option = document.createElement('option');
+                option.value = game.game_key;
+                option.textContent = `${game.game_name} (${game.season})`;
+                option.dataset.index = index;
+                gameSelector.appendChild(option);
+            });
+            
+            // Set selected game if we have a selected league
+            if (selectedLeagueKey) {
+                gamesLeaguesData.forEach((game, index) => {
+                    const league = game.leagues.find(l => l.league_key === selectedLeagueKey);
+                    if (league) {
+                        gameSelector.value = game.game_key;
+                        gameSelector.dispatchEvent(new Event('change'));
+                        // Set league selector after a brief delay to ensure it's populated
+                        setTimeout(() => {
+                            leagueSelector.value = selectedLeagueKey;
+                        }, 100);
+                    }
+                });
+            }
+            
+            // Handle game selection change
+            gameSelector.addEventListener('change', function() {
+                const selectedGameKey = this.value;
+                leagueSelector.innerHTML = '<option value="">Select a league...</option>';
+                
+                if (!selectedGameKey) {
+                    return;
+                }
+                
+                const selectedGame = gamesLeaguesData.find(g => g.game_key === selectedGameKey);
+                if (selectedGame && selectedGame.leagues) {
+                    selectedGame.leagues.forEach(league => {
+                        const option = document.createElement('option');
+                        option.value = league.league_key;
+                        option.textContent = league.name || league.league_key;
+                        leagueSelector.appendChild(option);
+                    });
+                }
+            });
+            
+            // Handle league selection change
+            leagueSelector.addEventListener('change', function() {
+                const selectedLeagueKey = this.value;
+                if (selectedLeagueKey) {
+                    loadLeagueData(selectedLeagueKey);
+                }
+            });
+        }
+        
+        // Load league data via AJAX
+        function loadLeagueData(leagueKey) {
+            // Show loading state
+            const leagueInfoDiv = document.getElementById('league-info');
+            leagueInfoDiv.innerHTML = '<div style="text-align: center; padding: 20px;">Loading...</div>';
+            
+            // Fetch league data
+            fetch(`/api/league-data?league_key=${encodeURIComponent(leagueKey)}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        throw new Error(data.error);
+                    }
+                    
+                    // Update global variables
+                    teamsData = data.teams || [];
+                    weeklyData = data.weekly || [];
+                    weeklyStatsData = data.weekly_stats || [];
+                    weeklyPerformanceData = data.weekly_performance || [];
+                    leagueInfo = data.league_info || {};
+                    
+                    // Update URL without reloading page
+                    const newUrl = `/?league_key=${encodeURIComponent(leagueKey)}`;
+                    window.history.pushState({leagueKey}, '', newUrl);
+                    
+                    // Refresh all displays
+                    refreshAllDisplays();
+                })
+                .catch(error => {
+                    console.error('Error loading league data:', error);
+                    leagueInfoDiv.innerHTML = `<div style="color: red; padding: 20px;">Error: ${error.message}</div>`;
+                });
+        }
+        
+        // Refresh all displays with current data
+        function refreshAllDisplays() {
+            // Update league info
+            if (leagueInfo) {
+                const leagueNameElement = document.getElementById('league-name');
+                if (leagueNameElement && leagueInfo.name) {
+                    leagueNameElement.textContent = `🏈 ${leagueInfo.name}`;
+                }
+                const leagueInfoDiv = document.getElementById('league-info');
+                leagueInfoDiv.innerHTML = `
+                    <div class="info-item">
+                        <div class="info-label">Season</div>
+                        <div class="info-value">${leagueInfo.season || 'N/A'}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Teams</div>
+                        <div class="info-value">${leagueInfo.num_teams || 'N/A'}</div>
+                    </div>
+                    <div class="info-item">
+                        <div class="info-label">Current Week</div>
+                        <div class="info-value">${leagueInfo.current_week || 'N/A'}</div>
+                    </div>
+                `;
+            }
+            
+            // Refresh all tables and charts
+            if (teamsData && teamsData.length > 0) {
+                displayTeamsTable(teamsData);
+                createStandingsChart(teamsData);
+                createPointsChart(teamsData);
+                
+                if (weeklyStatsData && weeklyStatsData.length > 0) {
+                    createMovesChart(teamsData, weeklyStatsData);
+                    createFAABChart(teamsData, weeklyStatsData);
+                    createTradesChart(teamsData, weeklyStatsData);
+                }
+            }
+            
+            if (weeklyData && weeklyData.length > 0) {
+                displayWeeklyTable(weeklyData);
+                createWeeklyScoresChart(weeklyData);
+                if (teamsData && teamsData.length > 0) {
+                    createStandingsByWeekChart(weeklyData, teamsData);
+                    createCumulativePointsChart(weeklyData, teamsData);
+                }
+            }
+            
+            if (weeklyPerformanceData && weeklyPerformanceData.length > 0 && teamsData && teamsData.length > 0) {
+                createRecordPercentageVsAllChart(weeklyPerformanceData, teamsData);
+                createCumulativeRecordPercentageVsAllChart(weeklyPerformanceData, teamsData);
+            }
+        }
         
         // Display league info
         if (leagueInfo) {
@@ -842,7 +1062,182 @@
             Plotly.newPlot('standings-by-week-chart', traces, layout, {responsive: true});
         }
         
-        // Initialize page
+        // Create record percentage vs all chart
+        function createRecordPercentageVsAllChart(weeklyPerformanceData, teamsData) {
+            if (!weeklyPerformanceData || weeklyPerformanceData.length === 0 || !teamsData || teamsData.length === 0) return;
+            
+            // Create team name mapping
+            const teamMap = {};
+            teamsData.forEach(team => {
+                teamMap[team.team_key] = team.team_name;
+            });
+            
+            // Get all weeks and sort
+            const weeks = [...new Set(weeklyPerformanceData.map(row => parseInt(row.week)))].sort((a, b) => a - b);
+            
+            // Group data by team
+            const teamData = {};
+            weeklyPerformanceData.forEach(row => {
+                const teamKey = row.team_key;
+                if (!teamData[teamKey]) {
+                    teamData[teamKey] = {
+                        name: teamMap[teamKey] || row.team_name || 'Unknown',
+                        weeks: [],
+                        beatPercentages: []
+                    };
+                }
+                teamData[teamKey].weeks.push(parseInt(row.week));
+                teamData[teamKey].beatPercentages.push(parseFloat(row.record_percentage_vs_all) || 0);
+            });
+            
+            // Create traces for each team
+            const traces = Object.keys(teamData).map(teamKey => {
+                const data = teamData[teamKey];
+                // Sort by week to ensure proper line plotting
+                const sortedIndices = data.weeks.map((_, i) => i).sort((a, b) => data.weeks[a] - data.weeks[b]);
+                const sortedWeeks = sortedIndices.map(i => data.weeks[i]);
+                const sortedBeatPct = sortedIndices.map(i => data.beatPercentages[i]);
+                
+                return {
+                    x: sortedWeeks,
+                    y: sortedBeatPct,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: data.name,
+                    line: {
+                        width: 2
+                    },
+                    marker: {
+                        size: 6
+                    }
+                };
+            });
+            
+            const layout = {
+                title: 'Record Percentage vs All by Week',
+                xaxis: {
+                    title: 'Week',
+                    type: 'linear',
+                    dtick: 1
+                },
+                yaxis: {
+                    title: 'Record Percentage vs All (%)',
+                    range: [0, 100]
+                },
+                margin: { l: 60, r: 50, t: 50, b: 50 },
+                hovermode: 'closest',
+                legend: {
+                    orientation: 'v',
+                    x: 1.02,
+                    y: 1,
+                    xanchor: 'left'
+                }
+            };
+            
+            Plotly.newPlot('beat-percentage-chart', traces, layout, {responsive: true});
+        }
+        
+        // Create cumulative record percentage vs all chart
+        function createCumulativeRecordPercentageVsAllChart(weeklyPerformanceData, teamsData) {
+            if (!weeklyPerformanceData || weeklyPerformanceData.length === 0 || !teamsData || teamsData.length === 0) return;
+            
+            // Create team name mapping
+            const teamMap = {};
+            teamsData.forEach(team => {
+                teamMap[team.team_key] = team.team_name;
+            });
+            
+            // Get all weeks and sort
+            const weeks = [...new Set(weeklyPerformanceData.map(row => parseInt(row.week)))].sort((a, b) => a - b);
+            
+            // Group data by team
+            const teamData = {};
+            weeklyPerformanceData.forEach(row => {
+                const teamKey = row.team_key;
+                if (!teamData[teamKey]) {
+                    teamData[teamKey] = {
+                        name: teamMap[teamKey] || row.team_name || 'Unknown',
+                        weeks: [],
+                        beatPercentages: []
+                    };
+                }
+                teamData[teamKey].weeks.push(parseInt(row.week));
+                teamData[teamKey].beatPercentages.push(parseFloat(row.record_percentage_vs_all) || 0);
+            });
+            
+            // Calculate cumulative average record percentage vs all for each team
+            const traces = Object.keys(teamData).map(teamKey => {
+                const data = teamData[teamKey];
+                // Sort by week to ensure proper line plotting
+                const sortedIndices = data.weeks.map((_, i) => i).sort((a, b) => data.weeks[a] - data.weeks[b]);
+                const sortedWeeks = sortedIndices.map(i => data.weeks[i]);
+                const sortedBeatPct = sortedIndices.map(i => data.beatPercentages[i]);
+                
+                // Calculate cumulative average (running average)
+                const cumulativeAverages = [];
+                let sum = 0;
+                for (let i = 0; i < sortedBeatPct.length; i++) {
+                    sum += sortedBeatPct[i];
+                    cumulativeAverages.push(sum / (i + 1)); // Average up to this week
+                }
+                
+                return {
+                    x: sortedWeeks,
+                    y: cumulativeAverages,
+                    type: 'scatter',
+                    mode: 'lines+markers',
+                    name: data.name,
+                    line: {
+                        width: 2
+                    },
+                    marker: {
+                        size: 6
+                    }
+                };
+            });
+            
+            const layout = {
+                title: 'Cumulative Average Record Percentage vs All by Week',
+                xaxis: {
+                    title: 'Week',
+                    type: 'linear',
+                    dtick: 1
+                },
+                yaxis: {
+                    title: 'Cumulative Average Record Percentage vs All (%)',
+                    range: [0, 100]
+                },
+                margin: { l: 80, r: 50, t: 50, b: 50 },
+                hovermode: 'closest',
+                legend: {
+                    orientation: 'v',
+                    x: 1.02,
+                    y: 1,
+                    xanchor: 'left'
+                },
+                annotations: [{
+                    text: 'Shows average record percentage vs all from Week 1 to current week',
+                    xref: 'paper',
+                    yref: 'paper',
+                    x: 0.5,
+                    y: -0.15,
+                    xanchor: 'center',
+                    yanchor: 'top',
+                    showarrow: false,
+                    font: {
+                        size: 11,
+                        color: '#666'
+                    }
+                }]
+            };
+            
+            Plotly.newPlot('cumulative-beat-percentage-chart', traces, layout, {responsive: true});
+        }
+        
+        // Initialize dropdowns first
+        initializeDropdowns();
+        
+        // Initialize page with initial data
         if (teamsData && teamsData.length > 0) {
             displayTeamsTable(teamsData);
             createStandingsChart(teamsData);
@@ -862,6 +1257,11 @@
                 createStandingsByWeekChart(weeklyData, teamsData);
                 createCumulativePointsChart(weeklyData, teamsData);
             }
+        }
+        
+        if (weeklyPerformanceData && weeklyPerformanceData.length > 0 && teamsData && teamsData.length > 0) {
+            createRecordPercentageVsAllChart(weeklyPerformanceData, teamsData);
+            createCumulativeRecordPercentageVsAllChart(weeklyPerformanceData, teamsData);
         }
     </script>
 </body>

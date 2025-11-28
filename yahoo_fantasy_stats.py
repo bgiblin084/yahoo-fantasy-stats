@@ -335,6 +335,22 @@ def main():
                                     except Exception as e:
                                         logging.debug(f"Failed to fetch weekly team stats: {e}")
                                     
+                                    # Get weekly team performance (points and record percentage vs all by week)
+                                    weekly_performance_df = None
+                                    try:
+                                        logging.info("Fetching weekly team performance (points and record percentage vs all)...")
+                                        weekly_performance_df = api.get_weekly_team_performance_dataframe(league_key)
+                                        if weekly_performance_df is not None and not weekly_performance_df.empty:
+                                            logging.info(f"Successfully created weekly performance DataFrame with {len(weekly_performance_df)} row(s)")
+                                            print(f"\nWeekly Team Performance DataFrame:")
+                                            print(weekly_performance_df.to_string())
+                                        else:
+                                            logging.debug("No weekly performance data available")
+                                    except ImportError as e:
+                                        logging.warning(f"pandas not available: {e}")
+                                    except Exception as e:
+                                        logging.debug(f"Failed to fetch weekly performance data: {e}")
+                                    
                                     # Save all dataframes as CSV files
                                     try:
                                         # Create output directory
@@ -386,6 +402,15 @@ def main():
                                             saved_files.append(filepath)
                                             logging.info(f"Saved weekly team stats to: {filepath}")
                                             print(f"✓ Saved weekly team stats to: {filepath}")
+                                        
+                                        # Save weekly team performance DataFrame (points and record percentage vs all)
+                                        if weekly_performance_df is not None and not weekly_performance_df.empty:
+                                            filename = f"{league_name_safe}_weekly_team_performance_{timestamp}.csv"
+                                            filepath = os.path.join(output_dir, filename)
+                                            weekly_performance_df.to_csv(filepath, index=False)
+                                            saved_files.append(filepath)
+                                            logging.info(f"Saved weekly team performance to: {filepath}")
+                                            print(f"✓ Saved weekly team performance to: {filepath}")
                                         
                                         if saved_files:
                                             print(f"\nAll dataframes saved to '{output_dir}' directory")
