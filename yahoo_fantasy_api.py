@@ -1576,6 +1576,16 @@ class YahooFantasyAPI:
                                                     manager = manager_item.get('manager', {})
                                                     if isinstance(manager, dict):
                                                         team_info['manager_nickname'] = manager.get('nickname', 'N/A')
+                                                        # Apply nickname mapping if available (auto-adds to CSV if not found)
+                                                        if self.nickname_mapper and team_info.get('manager_nickname') == "--hidden--":
+                                                            team_name = team_info.get('name', 'N/A')
+                                                            # Extract season from league_key (format: {game_id}.l.{league_id})
+                                                            season = league_key.split('.')[0] if '.' in league_key and league_key else ''
+                                                            if season and season.isdigit() and team_name != 'N/A':
+                                                                # Apply mapping (will auto-add to CSV with "FIXME" if not found)
+                                                                team_info['manager_nickname'] = self.nickname_mapper.apply_mapping(
+                                                                    team_name, league_key, season, team_info['manager_nickname']
+                                                                )
                                                         break  # Use first manager's nickname
                                         elif isinstance(v, dict):
                                             team_info.update(v)
@@ -1595,18 +1605,16 @@ class YahooFantasyAPI:
                     team_name = team_info.get('name', 'N/A')
                     team_key = team_info.get('team_key', 'N/A')
                     
-                    # Apply nickname mapping if available
+                    # Apply nickname mapping if available (auto-adds to CSV if not found)
                     if self.nickname_mapper and manager_nickname == "--hidden--":
                         # Extract season from league_key (format: {game_id}.l.{league_id})
                         # Season is typically the first part before the dot
                         season = league_key.split('.')[0] if '.' in league_key else ''
                         if season and season.isdigit():
-                            # Try to get mapped nickname
-                            mapped_nickname = self.nickname_mapper.get_manager_nickname(
-                                team_name, league_key, season
+                            # Apply mapping (will auto-add to CSV with "FIXME" if not found)
+                            manager_nickname = self.nickname_mapper.apply_mapping(
+                                team_name, league_key, season, manager_nickname
                             )
-                            if mapped_nickname:
-                                manager_nickname = mapped_nickname
                     
                     parsed_team = {
                         'team_key': team_key,
@@ -2041,12 +2049,13 @@ class YahooFantasyAPI:
         
         return df
     
-    def _extract_team_from_matchup(self, team_raw: Any) -> Optional[Dict[str, Any]]:
+    def _extract_team_from_matchup(self, team_raw: Any, league_key: str = '') -> Optional[Dict[str, Any]]:
         """
         Extract team info from matchup team structure.
         
         Args:
             team_raw: Team data from matchup (can be list or dict)
+            league_key: League key for nickname mapping (optional)
             
         Returns:
             dict: Team info dictionary, or None if not found
@@ -2072,6 +2081,16 @@ class YahooFantasyAPI:
                                                 manager = manager_item.get('manager', {})
                                                 if isinstance(manager, dict):
                                                     team_info['manager_nickname'] = manager.get('nickname', 'N/A')
+                                                    # Apply nickname mapping if available (auto-adds to CSV if not found)
+                                                    if self.nickname_mapper and team_info.get('manager_nickname') == "--hidden--":
+                                                        team_name = team_info.get('name', 'N/A')
+                                                        # Extract season from league_key (format: {game_id}.l.{league_id})
+                                                        season = league_key.split('.')[0] if '.' in league_key and league_key else ''
+                                                        if season and season.isdigit() and team_name != 'N/A':
+                                                            # Apply mapping (will auto-add to CSV with "FIXME" if not found)
+                                                            team_info['manager_nickname'] = self.nickname_mapper.apply_mapping(
+                                                                team_name, league_key, season, team_info['manager_nickname']
+                                                            )
                                     else:
                                         team_info.update(v)
                                 elif not isinstance(v, list):

@@ -168,6 +168,7 @@ class ManagerNicknameMapper:
     def apply_mapping(self, team_name: str, league_key: str, season: str, current_nickname: str) -> str:
         """
         Apply mapping if current nickname is "--hidden--" or empty.
+        If not found in CSV, automatically adds entry with "FIXME" as default.
         
         Args:
             team_name: Team name
@@ -176,12 +177,18 @@ class ManagerNicknameMapper:
             current_nickname: Current manager nickname from API
             
         Returns:
-            str: Mapped nickname if available, otherwise current nickname
+            str: Mapped nickname if available, "FIXME" if auto-added, otherwise current nickname
         """
         if current_nickname == "--hidden--" or not current_nickname or current_nickname == "N/A":
             mapped = self.get_manager_nickname(team_name, league_key, season)
             if mapped:
                 return mapped
+            
+            # If not found and nickname is "--hidden--", add to CSV with "FIXME"
+            if current_nickname == "--hidden--" and team_name and team_name != 'N/A' and league_key and season:
+                # Add entry with FIXME as default
+                self.set_manager_nickname(team_name, league_key, season, "FIXME")
+                return "FIXME"
         
         return current_nickname
     
