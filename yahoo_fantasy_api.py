@@ -59,6 +59,78 @@ class YahooFantasyAPI:
         self.cache_manager = CacheManager() if self.use_cache else None
         self.nickname_mapper = ManagerNicknameMapper() if NICKNAME_MAPPER_AVAILABLE else None
     
+    def _apply_nickname_mapping_to_df(self, df: 'pd.DataFrame', league_key: str) -> 'pd.DataFrame':
+        """
+        Apply nickname mapping to a DataFrame containing team data.
+        
+        Args:
+            df: DataFrame with team data (must have 'manager_nickname' and 'team_name' columns)
+            league_key: League key for extracting season
+            
+        Returns:
+            pd.DataFrame: DataFrame with mapped nicknames applied
+        """
+        if not PANDAS_AVAILABLE or df is None or df.empty:
+            return df
+        
+        if not self.nickname_mapper:
+            return df
+        
+        # Extract season from league_key (format: {game_id}.l.{league_id})
+        season = league_key.split('.')[0] if '.' in league_key and league_key else ''
+        if not season or not season.isdigit():
+            return df
+        
+        # Check if DataFrame has the required columns
+        if 'manager_nickname' not in df.columns or 'team_name' not in df.columns:
+            return df
+        
+        # Apply mapping to rows with "--hidden--" nickname
+        for idx in df.index:
+            nickname = df.loc[idx, 'manager_nickname']
+            if nickname == "--hidden--" or nickname == "N/A" or not nickname:
+                team_name = df.loc[idx, 'team_name']
+                if team_name and team_name != 'N/A':
+                    mapped_nickname = self.nickname_mapper.apply_mapping(
+                        team_name, league_key, season, nickname
+                    )
+                    df.loc[idx, 'manager_nickname'] = mapped_nickname
+        
+        return df
+    
+    def _apply_nickname_mapping_to_list(self, data_list: List[Dict[str, Any]], league_key: str) -> List[Dict[str, Any]]:
+        """
+        Apply nickname mapping to a list of team data dictionaries.
+        
+        Args:
+            data_list: List of team data dictionaries
+            league_key: League key for extracting season
+            
+        Returns:
+            list: List with mapped nicknames applied
+        """
+        if not data_list or not self.nickname_mapper:
+            return data_list
+        
+        # Extract season from league_key (format: {game_id}.l.{league_id})
+        season = league_key.split('.')[0] if '.' in league_key and league_key else ''
+        if not season or not season.isdigit():
+            return data_list
+        
+        # Apply mapping to each item
+        for item in data_list:
+            if isinstance(item, dict):
+                nickname = item.get('manager_nickname', '')
+                if nickname == "--hidden--" or nickname == "N/A" or not nickname:
+                    team_name = item.get('team_name', '')
+                    if team_name and team_name != 'N/A':
+                        mapped_nickname = self.nickname_mapper.apply_mapping(
+                            team_name, league_key, season, nickname
+                        )
+                        item['manager_nickname'] = mapped_nickname
+        
+        return data_list
+    
     def _make_request(self, url, params=None, retry=True):
         """
         Make an API request with automatic token refresh on expiration.
@@ -408,6 +480,8 @@ class YahooFantasyAPI:
         if self.use_cache and not force_refresh and is_prior_season:
             cached_data = self.cache_manager.get(league_key, 'weekly_stats')
             if cached_data is not None:
+                # Apply nickname mapping to cached data
+                cached_data = self._apply_nickname_mapping_to_list(cached_data, league_key)
                 # Filter by week range if specified
                 if start_week is not None or end_week is not None:
                     filtered_data = []
@@ -1088,6 +1162,8 @@ class YahooFantasyAPI:
             if cached_data is not None:
                 try:
                     df = pd.DataFrame(cached_data)
+                    # Apply nickname mapping to cached data
+                    df = self._apply_nickname_mapping_to_df(df, league_key)
                     return df
                 except Exception:
                     # If cached data is invalid, continue to fetch from API
