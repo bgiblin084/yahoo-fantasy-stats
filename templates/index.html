@@ -354,10 +354,28 @@
                 <h2>Aggregate Standings Across Multiple Leagues</h2>
                 
                 <div class="aggregate-controls">
-                    <label for="league-regex">League Name Filter (Regex):</label>
-                    <input type="text" id="league-regex" placeholder="e.g., .*League.* or ^My League$" value=".*">
-                    <button id="load-aggregate-btn" onclick="loadAggregateStandings()">Load Aggregate Stats</button>
-                    <span id="aggregate-status" style="margin-left: 15px; color: #666;"></span>
+                    <div style="display: flex; flex-wrap: wrap; gap: 15px; align-items: center; margin-bottom: 15px;">
+                        <div>
+                            <label for="league-regex">League Name Filter (Regex):</label>
+                            <input type="text" id="league-regex" placeholder="e.g., .*League.* or ^My League$" value=".*" style="margin-left: 5px;">
+                        </div>
+                        <div>
+                            <label for="year-start">Start Year:</label>
+                            <select id="year-start" style="margin-left: 5px;">
+                                <option value="">All Years</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label for="year-end">End Year:</label>
+                            <select id="year-end" style="margin-left: 5px;">
+                                <option value="">All Years</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div>
+                        <button id="load-aggregate-btn" onclick="loadAggregateStandings()">Load Aggregate Stats</button>
+                        <span id="aggregate-status" style="margin-left: 15px; color: #666;"></span>
+                    </div>
                 </div>
                 
                 <div id="aggregate-loading" class="loading-message" style="display: none;">
@@ -1413,6 +1431,8 @@
         // Load aggregate standings
         function loadAggregateStandings() {
             const regexPattern = document.getElementById('league-regex').value;
+            const yearStart = document.getElementById('year-start').value;
+            const yearEnd = document.getElementById('year-end').value;
             const statusSpan = document.getElementById('aggregate-status');
             const loadingDiv = document.getElementById('aggregate-loading');
             const tableContainer = document.getElementById('aggregate-table-container');
@@ -1424,6 +1444,13 @@
                 return;
             }
             
+            // Validate year range
+            if (yearStart && yearEnd && parseInt(yearStart) > parseInt(yearEnd)) {
+                statusSpan.textContent = 'Start year must be less than or equal to end year';
+                statusSpan.style.color = '#d32f2f';
+                return;
+            }
+            
             // Show loading state
             loadBtn.disabled = true;
             loadingDiv.style.display = 'block';
@@ -1431,8 +1458,17 @@
             statusSpan.textContent = 'Loading...';
             statusSpan.style.color = '#666';
             
+            // Build query parameters
+            let queryParams = `league_regex=${encodeURIComponent(regexPattern)}`;
+            if (yearStart) {
+                queryParams += `&year_start=${encodeURIComponent(yearStart)}`;
+            }
+            if (yearEnd) {
+                queryParams += `&year_end=${encodeURIComponent(yearEnd)}`;
+            }
+            
             // Fetch aggregate data
-            fetch(`/api/aggregate-standings?league_regex=${encodeURIComponent(regexPattern)}`)
+            fetch(`/api/aggregate-standings?${queryParams}`)
                 .then(response => response.json())
                 .then(data => {
                     if (data.error) {
@@ -1532,8 +1568,50 @@
             ).join('');
         }
         
+        // Initialize year dropdowns for aggregate standings
+        function initializeYearDropdowns() {
+            const yearStart = document.getElementById('year-start');
+            const yearEnd = document.getElementById('year-end');
+            
+            if (!gamesLeaguesData || gamesLeaguesData.length === 0) {
+                return;
+            }
+            
+            // Collect all unique years from games
+            const years = new Set();
+            gamesLeaguesData.forEach(game => {
+                const season = game.season;
+                if (season && season !== 'N/A') {
+                    years.add(parseInt(season));
+                }
+            });
+            
+            // Sort years descending
+            const sortedYears = Array.from(years).sort((a, b) => b - a);
+            
+            // Populate both dropdowns
+            sortedYears.forEach(year => {
+                const option1 = document.createElement('option');
+                option1.value = year;
+                option1.textContent = year;
+                yearStart.appendChild(option1);
+                
+                const option2 = document.createElement('option');
+                option2.value = year;
+                option2.textContent = year;
+                yearEnd.appendChild(option2);
+            });
+            
+            // Set default to most recent year if available
+            if (sortedYears.length > 0) {
+                yearStart.value = sortedYears[0];
+                yearEnd.value = sortedYears[0];
+            }
+        }
+        
         // Initialize dropdowns first
         initializeDropdowns();
+        initializeYearDropdowns();
         
         // Initialize page with initial data
         if (teamsData && teamsData.length > 0) {

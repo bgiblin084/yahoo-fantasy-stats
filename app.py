@@ -234,9 +234,27 @@ def api_aggregate_standings():
     """API endpoint for aggregate standings across multiple leagues."""
     try:
         league_regex = request.args.get('league_regex', '.*')
+        year_start = request.args.get('year_start', None)
+        year_end = request.args.get('year_end', None)
         
         if not league_regex:
             return jsonify({'error': 'league_regex parameter required'}), 400
+        
+        # Validate year range if provided
+        if year_start:
+            try:
+                year_start = int(year_start)
+            except ValueError:
+                return jsonify({'error': 'year_start must be a valid integer'}), 400
+        
+        if year_end:
+            try:
+                year_end = int(year_end)
+            except ValueError:
+                return jsonify({'error': 'year_end must be a valid integer'}), 400
+        
+        if year_start and year_end and year_start > year_end:
+            return jsonify({'error': 'year_start must be less than or equal to year_end'}), 400
         
         # Initialize API if needed
         if api_client is None:
@@ -245,7 +263,7 @@ def api_aggregate_standings():
         # Get all games and leagues
         games_with_leagues = get_all_games_and_leagues()
         
-        # Filter leagues by regex pattern
+        # Filter leagues by regex pattern and year range
         matching_leagues = []
         try:
             pattern = re.compile(league_regex, re.IGNORECASE)
@@ -253,13 +271,27 @@ def api_aggregate_standings():
             return jsonify({'error': f'Invalid regex pattern: {e}'}), 400
         
         for game in games_with_leagues:
+            season = game.get('season', 'N/A')
+            
+            # Filter by year range if provided
+            if season != 'N/A':
+                try:
+                    season_year = int(season)
+                    if year_start and season_year < year_start:
+                        continue
+                    if year_end and season_year > year_end:
+                        continue
+                except (ValueError, TypeError):
+                    # If season is not a valid integer, skip year filtering for this game
+                    pass
+            
             for league in game.get('leagues', []):
                 league_name = league.get('name', '')
                 if pattern.search(league_name):
                     matching_leagues.append({
                         'league_key': league.get('league_key'),
                         'league_name': league_name,
-                        'season': game.get('season'),
+                        'season': season,
                         'game_name': game.get('game_name')
                     })
         
