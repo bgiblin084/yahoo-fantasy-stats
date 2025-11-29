@@ -25,6 +25,14 @@ except ImportError:
     CACHE_AVAILABLE = False
     CacheManager = None
 
+# Import manager nickname mapper if available
+try:
+    from manager_nickname_mapper import ManagerNicknameMapper
+    NICKNAME_MAPPER_AVAILABLE = True
+except ImportError:
+    NICKNAME_MAPPER_AVAILABLE = False
+    ManagerNicknameMapper = None
+
 
 class YahooFantasyAPI:
     """
@@ -49,6 +57,7 @@ class YahooFantasyAPI:
         self.oauth_client = oauth_client
         self.use_cache = use_cache and CACHE_AVAILABLE
         self.cache_manager = CacheManager() if self.use_cache else None
+        self.nickname_mapper = ManagerNicknameMapper() if NICKNAME_MAPPER_AVAILABLE else None
     
     def _make_request(self, url, params=None, retry=True):
         """
@@ -1091,7 +1100,7 @@ class YahooFantasyAPI:
         # Try to get standings first (includes team stats)
         try:
             standings_data = self.get_league_standings(league_key)
-            team_stats_list = self._parse_standings(standings_data)
+            team_stats_list = self._parse_standings(standings_data, league_key)
             if team_stats_list:
                 df = pd.DataFrame(team_stats_list)
                 
@@ -1485,12 +1494,13 @@ class YahooFantasyAPI:
         
         return parsed_stats
     
-    def _parse_standings(self, standings_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+    def _parse_standings(self, standings_data: Dict[str, Any], league_key: str = '') -> List[Dict[str, Any]]:
         """
         Parse team standings/stats from league standings API response.
         
         Args:
             standings_data: Raw standings data from get_league_standings()
+            league_key: League key for nickname mapping (optional)
             
         Returns:
             list: List of team stats dictionaries
@@ -1581,15 +1591,32 @@ class YahooFantasyAPI:
                         team_standings = team_info.get('team_standings', {})
                     
                     # Extract basic team info
+                    manager_nickname = team_info.get('manager_nickname', 'N/A')
+                    team_name = team_info.get('name', 'N/A')
+                    team_key = team_info.get('team_key', 'N/A')
+                    
+                    # Apply nickname mapping if available
+                    if self.nickname_mapper and manager_nickname == "--hidden--":
+                        # Extract season from league_key (format: {game_id}.l.{league_id})
+                        # Season is typically the first part before the dot
+                        season = league_key.split('.')[0] if '.' in league_key else ''
+                        if season and season.isdigit():
+                            # Try to get mapped nickname
+                            mapped_nickname = self.nickname_mapper.get_manager_nickname(
+                                team_name, league_key, season
+                            )
+                            if mapped_nickname:
+                                manager_nickname = mapped_nickname
+                    
                     parsed_team = {
-                        'team_key': team_info.get('team_key', 'N/A'),
-                        'team_name': team_info.get('name', 'N/A'),
+                        'team_key': team_key,
+                        'team_name': team_name,
                         'team_id': team_info.get('team_id', 'N/A'),
                         'number_of_moves': team_info.get('number_of_moves', 'N/A'),
                         'number_of_trades': team_info.get('number_of_trades', 'N/A'),
                         'faab_balance': team_info.get('faab_balance', 'N/A'),
                         'draft_grade': team_info.get('draft_grade', 'N/A'),
-                        'manager_nickname': team_info.get('manager_nickname', 'N/A'),
+                        'manager_nickname': manager_nickname,
                     }
                     
                     # Add standings info if available
@@ -1670,7 +1697,7 @@ class YahooFantasyAPI:
         for week in range(start, min(end + 1, current_week + 1)):
             try:
                 scoreboard_data = self.get_league_scoreboard(league_key, week)
-                week_matchups = self._parse_scoreboard(scoreboard_data, week)
+                week_matchups = self._parse_scoreboard(scoreboard_data, week, league_key)
                 if week_matchups:
                     weekly_data_list.extend(week_matchups)
             except Exception as e:
@@ -1694,13 +1721,14 @@ class YahooFantasyAPI:
         
         return df
     
-    def _parse_scoreboard(self, scoreboard_data: Dict[str, Any], week: int) -> List[Dict[str, Any]]:
+    def _parse_scoreboard(self, scoreboard_data: Dict[str, Any], week: int, league_key: str = '') -> List[Dict[str, Any]]:
         """
         Parse scoreboard/matchup data from API response.
         
         Args:
             scoreboard_data: Raw scoreboard data from get_league_scoreboard()
             week: Week number
+            league_key: League key for nickname mapping (optional)
             
         Returns:
             list: List of weekly matchup dictionaries
@@ -1771,11 +1799,11 @@ class YahooFantasyAPI:
                                                 if team_key != 'count' and team_key.isdigit():
                                                     team_data = teams_dict.get(team_key, {})
                                                     if isinstance(team_data, dict) and 'team' in team_data:
-                                                        team_info = self._extract_team_from_matchup(team_data.get('team', {}))
+                                                        team_info = self._extract_team_from_matchup(team_data.get('team', {}), league_key)
                                                         if team_info:
                                                             teams_in_matchup.append(team_info)
                                     elif isinstance(teams_obj, dict) and 'team' in teams_obj:
-                                        team_info = self._extract_team_from_matchup(teams_obj.get('team', {}))
+                                        team_info = self._extract_team_from_matchup(teams_obj.get('team', {}), league_key)
                                         if team_info:
                                             teams_in_matchup.append(team_info)
                         elif isinstance(matchup_raw, list):
@@ -1790,11 +1818,11 @@ class YahooFantasyAPI:
                                                 if team_key != 'count' and team_key.isdigit():
                                                     team_data = teams_obj.get(team_key, {})
                                                     if isinstance(team_data, dict) and 'team' in team_data:
-                                                        team_info = self._extract_team_from_matchup(team_data.get('team', {}))
+                                                        team_info = self._extract_team_from_matchup(team_data.get('team', {}), league_key)
                                                         if team_info:
                                                             teams_in_matchup.append(team_info)
                                     elif 'team' in item:
-                                        team_info = self._extract_team_from_matchup(item.get('team', {}))
+                                        team_info = self._extract_team_from_matchup(item.get('team', {}), league_key)
                                         if team_info:
                                             teams_in_matchup.append(team_info)
                             

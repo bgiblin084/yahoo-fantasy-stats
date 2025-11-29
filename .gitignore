@@ -45,3 +45,6 @@ yahoo_fantasy_data/
 # Cache files
 yahoo_fantasy_cache/
 
+# Manager nickname mappings (user-editable)
+manager_nicknames.csv
+
